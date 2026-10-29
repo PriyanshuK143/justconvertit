@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+.venv/
+venv/
+.env
+.python-version
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Packaging artifacts
+packaging/windows/Output/
+packaging/linux/*.AppImage
+*.spec.bak
+/OmniConvert.spec
+/OmniConvert-*.sha256
+
+# Local logs / temp
+*.log
+.tmp/
+/tmp_omniconvert/

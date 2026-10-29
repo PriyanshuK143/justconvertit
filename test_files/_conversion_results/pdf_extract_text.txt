@@ -1,0 +1,7 @@
+justconvertit Sample PDF — Page 1
+This page has embedded text for PDF to TXT / DOCX tests.
+Hello cafe and numbers 12345.
+
+
+justconvertit Sample PDF — Page 2
+Use Pages ZIP to render both pages.

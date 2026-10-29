@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# Artifacts are published for manual download — there is no in-app updater.
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements-release.txt
+          pip install -e .
+      - name: Install Linux GUI libs
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon0 libxcb-cursor0
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          python -m pytest -p pytestqt
+      - name: Dependency vulnerability scan
+        run: |
+          python -m pip install pip-audit
+          pip-audit -r requirements-release.txt
+
+  build-linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python -m pip install -U pip
+          pip install -r requirements-release.txt
+          pip install -e .
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon0 libxcb-cursor0
+          bash scripts/build_linux.sh
+          bash scripts/verify_offline.sh
+      - name: Checksum
+        run: |
+          cd dist && tar -czf justconvertit-linux-x86_64.tar.gz justconvertit
+          sha256sum justconvertit-linux-x86_64.tar.gz > ../justconvertit-linux.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: justconvertit-linux
+          path: |
+            dist/justconvertit-linux-x86_64.tar.gz
+            justconvertit-linux.sha256
+
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python -m pip install -U pip
+          pip install -r requirements-release.txt
+          pip install -e .
+          pyinstaller --noconfirm --clean packaging/windows/omniconvert.spec
+      - name: Smoke convert (offline-capable)
+        shell: pwsh
+        run: |
+          $in = Join-Path $env:TEMP "oc-in.png"
+          $out = Join-Path $env:TEMP "oc-out.jpg"
+          python -c "from PIL import Image; Image.new('RGB',(8,8),(1,2,3)).save(r'$in')"
+          .\dist\justconvertit\justconvertit.exe --smoke-convert image.png_to_jpeg $in $out
+          if (-not (Test-Path $out)) { throw "smoke output missing" }
+      - name: Checksum
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse dist\justconvertit | Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash) $($_.Path)" } |
+            Out-File -Encoding utf8 justconvertit-windows.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: justconvertit-windows
+          path: |
+            dist/justconvertit
+            justconvertit-windows.sha256

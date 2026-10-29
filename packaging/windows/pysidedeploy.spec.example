@@ -1,0 +1,20 @@
+; Example only — optional alternative to PyInstaller.
+; Official tool: pyside6-deploy (wraps Nuitka).
+; Docs: https://doc.qt.io/qtforpython-6/deployment/deployment-pyside6-deploy.html
+;
+; Primary Windows releases use packaging/windows/omniconvert.spec + Inno Setup.
+; To experiment:
+;   pip install Nuitka
+;   pyside6-deploy src/omniconvert/main.py --name justconvertit
+; Then compare size, startup time, and conversion smoke vs PyInstaller.
+
+[app]
+title = justconvertit
+project_dir = .
+input_file = src/omniconvert/main.py
+exec_directory = dist-nuitka
+icon = packaging/windows/omniconvert.ico
+
+[nuitka]
+mode = standalone
+extra_args = --quiet --noinclude-qt-translations=True

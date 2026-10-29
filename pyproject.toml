@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "justconvertit"
+version = "0.1.0"
+description = "Local-first cross-platform desktop file converter with a radial-wheel UI"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "justconvertit Contributors" }]
+keywords = ["converter", "desktop", "pyside6", "files"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: X11 Applications :: Qt",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Utilities",
+]
+# Prefer exact pins from requirements-release.txt for public builds.
+# Ranges below are for editable/dev installs; release artifacts must pin.
+dependencies = [
+  "PySide6>=6.6,<7",
+  "Pillow>=10.0,<14",
+  "pypdf>=5.0,<7",
+  "reportlab>=4.0,<5",
+  "pandas>=2.0,<3",
+  "openpyxl>=3.1,<4",
+  "pypdfium2>=4.0,<6",
+  "python-docx>=1.1,<2",
+  "python-pptx>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<10",
+  "pytest-qt>=4.2,<5",
+  "pyinstaller>=6.0,<7",
+]
+[project.urls]
+Documentation = "docs/RELEASE.md"
+Privacy = "docs/PRIVACY.md"
+Platforms = "docs/PLATFORMS.md"
+Security = "docs/SECURITY.md"
+
+# Optional intent for pyside6-deploy experiments (primary releases use PyInstaller).
+[tool.pyside6.deploy]
+title = "justconvertit"
+input_file = "src/omniconvert/main.py"
+exec_directory = "dist-nuitka"
+icon = "packaging/windows/omniconvert.ico"
+mode = "standalone"
+extra_args = "--quiet --noinclude-qt-translations=True"
+
+[project.scripts]
+justconvertit = "omniconvert.main:main"
+omniconvert = "omniconvert.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+omniconvert = ["resources/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+qt_api = "pyside6"
+# Avoid broken system pytest plugins (e.g. ROS launch_testing) polluting the venv run.
+addopts = "-q -p no:launch_testing -p no:launch_testing_ros"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

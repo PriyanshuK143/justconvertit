@@ -1,0 +1,5 @@
+justconvertit Sample Letter
+Hello — this is a Word document for conversion tests.
+Unicode: café — 日本語 — مرحبا
+Item	Value
+Version	0.1
