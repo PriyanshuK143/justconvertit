@@ -21,7 +21,19 @@ Conversion list: [docs/CONVERSION_MATRIX.md](docs/CONVERSION_MATRIX.md). Status:
 
 ## End users (no Python required)
 
-Download the Windows installer or Ubuntu archive from the **stable release page**, verify checksums, and follow [docs/INSTALL.md](docs/INSTALL.md).
+Download from the **stable release page**, verify checksums, then:
+
+**Ubuntu**
+
+```bash
+tar -xzf justconvertit-0.1.0-linux-x86_64.tar.gz
+cd justconvertit
+./install.sh
+```
+
+Open **justconvertit** from your app menu. Details: [docs/INSTALL.md](docs/INSTALL.md).
+
+**Windows** — run `justconvertit-<version>-Setup.exe`, then launch from the Start menu.
 
 After installation, core conversions work without internet.
 

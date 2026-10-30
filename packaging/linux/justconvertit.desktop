@@ -2,8 +2,9 @@
 Type=Application
 Name=justconvertit
 Comment=Offline-first local file converter
-Exec=/opt/justconvertit/justconvertit
-Icon=application-x-executable
+Exec=@EXEC@
+Icon=justconvertit
 Terminal=false
 Categories=Utility;Office;
 StartupNotify=false
+StartupWMClass=justconvertit

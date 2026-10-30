@@ -43,16 +43,15 @@ Windows (on a Windows host):
 # Then compile packaging\windows\installer.iss with Inno Setup
 ```
 
-## Checksums
+## Linux archive (produced by build script)
 
-```bash
-# Linux example
-cd dist
-tar -czf justconvertit-0.1.0-linux-x86_64.tar.gz justconvertit
-sha256sum justconvertit-0.1.0-linux-x86_64.tar.gz > justconvertit-0.1.0-linux-x86_64.sha256
-```
+`bash scripts/build_linux.sh` writes:
 
-Publish the `.sha256` file beside the archive on the release page. Users should verify before installing.
+- `dist/justconvertit/` — runnable folder including `install.sh` / `uninstall.sh`
+- `dist/justconvertit-<ver>-linux-<arch>.tar.gz` — shareable archive
+- `dist/justconvertit-<ver>-linux-<arch>.sha256` — checksum
+
+Publish the `.tar.gz` and `.sha256` on the release page. Users extract and run `./install.sh`.
 
 ## Dependency inventory
 

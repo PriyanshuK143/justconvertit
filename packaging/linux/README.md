@@ -1,20 +1,51 @@
 # Linux packaging
 
-## Standalone folder (primary)
+End users should never need this folder. They download a release archive and run `./install.sh`.
 
-1. Pin deps: `pip install -r requirements-release.txt && pip install -e .`
-2. Build: `bash scripts/build_linux.sh`
-3. Smoke offline: `bash scripts/verify_offline.sh`
-4. Test `dist/justconvertit/justconvertit` on a clean Ubuntu VM **without** Python/pip installed for the user.
-5. Archive + checksum (see `docs/RELEASE.md`).
+## What a release archive contains
 
-Install/uninstall steps for end users: `docs/INSTALL.md`.
+```
+justconvertit/
+  justconvertit          # app binary (PyInstaller)
+  _internal/             # bundled runtime
+  install.sh             # one-step user install
+  uninstall.sh
+  icons/justconvertit.png
+  INSTALL.md
+  PRIVACY.md
+  LICENSE
+```
+
+## Build (maintainers)
+
+```bash
+bash scripts/build_linux.sh
+# produces:
+#   dist/justconvertit/                          # runnable tree
+#   dist/justconvertit-0.1.0-linux-x86_64.tar.gz
+#   dist/justconvertit-0.1.0-linux-x86_64.sha256
+```
+
+Smoke offline: `bash scripts/verify_offline.sh`
+
+## End-user install
+
+```bash
+tar -xzf justconvertit-0.1.0-linux-x86_64.tar.gz
+cd justconvertit
+./install.sh
+```
+
+Default install path: `~/.local/opt/justconvertit`  
+App menu entry + `~/.local/bin/justconvertit` symlink.
+
+System-wide: `sudo ./install.sh --system` → `/opt/justconvertit`
 
 ## Optional wrappers
 
 After the PyInstaller tree is verified:
 
-- **AppImage** — wrap the folder with [appimagetool](https://appimage.github.io/)
-- **.deb** — install under `/opt/justconvertit`, ship `justconvertit.desktop`, and a symlink in `/usr/local/bin`
+- **AppImage** — wrap the folder with appimagetool
+- **.deb** — package the same tree under `/opt/justconvertit`
 
 Do not claim broad distro compatibility without testing each target. Do not add an in-app updater.

@@ -40,3 +40,6 @@ packaging/linux/*.AppImage
 *.log
 .tmp/
 /tmp_omniconvert/
+
+# Release archives created under dist/ (folder already ignored)
+*.sha256
