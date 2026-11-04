@@ -21,6 +21,7 @@ pyinstaller \
   --noconfirm \
   --clean \
   --windowed \
+  --disable-windowed-traceback \
   --name justconvertit \
   --paths src \
   --add-data "docs/THIRD_PARTY_NOTICES.md:docs" \
@@ -35,9 +36,20 @@ pyinstaller \
   --hidden-import omniconvert.converters.office_libreoffice \
   --hidden-import omniconvert.converters.media_ffmpeg \
   --hidden-import omniconvert.converters.svg_inkscape \
+  --runtime-hook packaging/rthooks/pyi_rth_omniconvert_stdio.py \
+  --exclude-module pandas \
+  --exclude-module numpy \
+  --exclude-module matplotlib \
+  --exclude-module scipy \
+  --exclude-module tkinter \
   --exclude-module PySide6.QtWebEngine \
   --exclude-module PySide6.QtWebEngineCore \
   --exclude-module PySide6.QtWebEngineWidgets \
+  --exclude-module PySide6.QtQuick \
+  --exclude-module PySide6.QtQml \
+  --exclude-module PySide6.QtMultimedia \
+  --exclude-module PySide6.QtCharts \
+  --exclude-module PySide6.Qt3DCore \
   --exclude-module pytest \
   --exclude-module pygments \
   --exclude-module py \

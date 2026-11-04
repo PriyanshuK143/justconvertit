@@ -1,4 +1,4 @@
-"""CSV / JSON / XLSX structured-data conversions."""
+"""CSV / JSON / XLSX structured-data conversions (stdlib + openpyxl only)."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _ensure_text_size(path: Path) -> None:
 
 
 def _csv_to_xlsx_fast(source: Path, destination: Path) -> None:
-    """Flat CSV → XLSX via openpyxl (avoids pandas import cost on this hot path)."""
+    """Flat CSV → XLSX via openpyxl."""
     from openpyxl import Workbook
 
     wb = Workbook(write_only=True)
@@ -58,6 +58,85 @@ def _xlsx_to_csv_fast(source: Path, destination: Path) -> None:
                 writer.writerow(["" if c is None else c for c in row])
     finally:
         wb.close()
+
+
+def _records_to_xlsx(records: list[dict[str, Any]], destination: Path) -> None:
+    from openpyxl import Workbook
+
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("Sheet1")
+    if not records:
+        ws.append([])
+        wb.save(destination)
+        return
+    fieldnames: list[str] = []
+    seen: set[str] = set()
+    for row in records:
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                fieldnames.append(key)
+    ws.append(fieldnames)
+    for row in records:
+        ws.append([row.get(k, "") for k in fieldnames])
+    wb.save(destination)
+
+
+def _xlsx_to_records(source: Path) -> list[dict[str, Any]]:
+    from openpyxl import load_workbook
+
+    wb = load_workbook(source, read_only=True, data_only=True)
+    try:
+        ws = wb.worksheets[0]
+        rows = ws.iter_rows(values_only=True)
+        try:
+            header_row = next(rows)
+        except StopIteration:
+            return []
+        headers = [
+            str(h) if h is not None and str(h).strip() != "" else f"column_{i + 1}"
+            for i, h in enumerate(header_row or ())
+        ]
+        if not headers:
+            return []
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            values = list(row or ())
+            # Pad / trim to header length
+            if len(values) < len(headers):
+                values.extend([None] * (len(headers) - len(values)))
+            record = {
+                headers[i]: (None if values[i] is None else values[i])
+                for i in range(len(headers))
+            }
+            # Skip totally empty rows
+            if all(v is None or v == "" for v in record.values()):
+                continue
+            out.append(record)
+        return out
+    finally:
+        wb.close()
+
+
+def _write_csv_records(records: list[dict[str, Any]], destination: Path) -> None:
+    fieldnames: list[str] = []
+    seen: set[str] = set()
+    for row in records:
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                fieldnames.append(key)
+    with destination.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames or ["value"], extrasaction="ignore")
+        writer.writeheader()
+        for row in records:
+            writer.writerow({k: ("" if row.get(k) is None else row.get(k)) for k in fieldnames})
+
+
+def _csv_to_records(source: Path) -> list[dict[str, Any]]:
+    with source.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        return [dict(row) for row in reader]
 
 
 def _is_flat_value(value: Any) -> bool:
@@ -96,9 +175,12 @@ def _json_to_records(data: Any) -> list[dict[str, Any]]:
                         "Columnar JSON values must be flat (no nested objects/arrays).",
                         detail=f"key={key!r}",
                     )
-            import pandas as pd
-
-            return pd.DataFrame(data).to_dict(orient="records")
+            keys = list(data.keys())
+            lengths = {len(data[k]) for k in keys}
+            if len(lengths) != 1:
+                raise ValidationError("Columnar JSON columns must have equal length.")
+            n = next(iter(lengths)) if lengths else 0
+            return [{k: data[k][i] for k in keys} for i in range(n)]
         for key, val in data.items():
             if not _is_flat_value(val):
                 raise ValidationError(
@@ -176,8 +258,6 @@ class TabularConverter(Converter):
         progress: ProgressCallback | None = None,
         is_cancelled: CancelCheck | None = None,
     ) -> ConversionResult:
-        import pandas as pd
-
         check_cancelled(is_cancelled)
         _ = settings
         if progress:
@@ -186,9 +266,8 @@ class TabularConverter(Converter):
         try:
             if operation_id == "data.csv_to_json":
                 _ensure_text_size(source)
-                df = pd.read_csv(source)
+                records = _csv_to_records(source)
                 check_cancelled(is_cancelled)
-                records = df.where(pd.notnull(df), None).to_dict(orient="records")
                 with AtomicWriter(destination) as tmp:
                     Path(tmp).write_text(
                         json.dumps(records, indent=2, ensure_ascii=False) + "\n",
@@ -199,9 +278,8 @@ class TabularConverter(Converter):
                 data = json.loads(source.read_text(encoding="utf-8-sig"))
                 records = _json_to_records(data)
                 check_cancelled(is_cancelled)
-                df = pd.DataFrame(records)
                 with AtomicWriter(destination) as tmp:
-                    df.to_csv(tmp, index=False)
+                    _write_csv_records(records, Path(tmp))
             elif operation_id == "data.csv_to_xlsx":
                 _ensure_text_size(source)
                 check_cancelled(is_cancelled)
@@ -215,13 +293,11 @@ class TabularConverter(Converter):
                 _ensure_text_size(source)
                 data = json.loads(source.read_text(encoding="utf-8-sig"))
                 records = _json_to_records(data)
-                df = pd.DataFrame(records)
                 check_cancelled(is_cancelled)
                 with AtomicWriter(destination) as tmp:
-                    df.to_excel(tmp, index=False)
+                    _records_to_xlsx(records, Path(tmp))
             elif operation_id == "data.xlsx_to_json":
-                df = pd.read_excel(source, sheet_name=0)
-                records = df.where(pd.notnull(df), None).to_dict(orient="records")
+                records = _xlsx_to_records(source)
                 check_cancelled(is_cancelled)
                 with AtomicWriter(destination) as tmp:
                     Path(tmp).write_text(
@@ -239,7 +315,7 @@ class TabularConverter(Converter):
             return ConversionResult(destination, size, "Data conversion completed.")
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise ValidationError("Could not parse the input file.", detail=str(exc)) from exc
-        except (pd.errors.ParserError, csv.Error, ValueError) as exc:
+        except (csv.Error, ValueError) as exc:
             raise ValidationError("Could not read tabular data.", detail=str(exc)) from exc
         except OSError as exc:
             raise ConversionFailedError("I/O error during data conversion.", detail=str(exc)) from exc

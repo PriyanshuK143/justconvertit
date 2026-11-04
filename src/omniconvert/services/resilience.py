@@ -50,8 +50,9 @@ def install_exception_hooks() -> None:
 
     def _sys_hook(exc_type, exc, tb) -> None:  # noqa: ANN001
         if issubclass(exc_type, KeyboardInterrupt):
-            sys.__excepthook__(exc_type, exc, tb)
+            # Avoid dumping to a missing stderr in windowed builds.
             return
+        # Full detail only in the local log file — never in a UI dialog.
         log.error("Uncaught exception:\n%s", _format_exc(exc_type, exc, tb))
         report_soft_error("Something went wrong — the app kept running.")
 

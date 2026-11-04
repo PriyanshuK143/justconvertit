@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -20,10 +21,12 @@ def setup_logging(level: int = logging.INFO) -> Path | None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    sh = logging.StreamHandler()
-    sh.setFormatter(formatter)
-    sh.setLevel(logging.WARNING)
-    root.addHandler(sh)
+    # Windowed packages may have no usable console; never attach a broken handler.
+    if sys.stderr is not None:
+        sh = logging.StreamHandler(stream=sys.stderr)
+        sh.setFormatter(formatter)
+        sh.setLevel(logging.WARNING)
+        root.addHandler(sh)
 
     log_path: Path | None = None
     try:

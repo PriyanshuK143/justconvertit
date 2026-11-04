@@ -10,9 +10,21 @@ import signal
 import sys
 from pathlib import Path
 
+
+def _ensure_stdio() -> None:
+    """Windowed PyInstaller builds set stdout/stderr to None — restore safely."""
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+
+
+# Must run before any logging / faulthandler / argparse use.
+_ensure_stdio()
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from omniconvert.core.registry import get_registry
 from omniconvert.services.dependencies import get_dependency_service
@@ -28,6 +40,12 @@ from omniconvert.ui.theme import apply_theme
 from omniconvert.version import __version__
 
 log = logging.getLogger("omniconvert")
+
+_USER_STARTUP_ERROR = (
+    "JustConvertIt could not start.\n\n"
+    "Try reinstalling the app. If it keeps failing, contact support "
+    "without sending personal files."
+)
 
 
 def _configure_windows_identity() -> None:
@@ -55,6 +73,17 @@ def _enable_high_dpi() -> None:
         pass
 
 
+def _enable_faulthandler() -> None:
+    """Fault dumps only when a real stderr exists (never crash windowed builds)."""
+    try:
+        err = sys.stderr
+        if err is None:
+            return
+        faulthandler.enable(file=err)
+    except Exception:
+        pass
+
+
 def _app_icon() -> QIcon:
     here = Path(__file__).resolve().parent
     for name in ("resources/omniconvert.png", "resources/omniconvert.ico"):
@@ -62,6 +91,26 @@ def _app_icon() -> QIcon:
         if path.is_file():
             return QIcon(str(path))
     return QIcon()
+
+
+def _show_fatal_dialog(message: str) -> None:
+    """User-facing fatal error — no paths, no line numbers, no traceback."""
+    try:
+        app = QApplication.instance()
+        created = False
+        if app is None:
+            app = QApplication(sys.argv[:1] or ["justconvertit"])
+            created = True
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Icon.Critical)
+        box.setWindowTitle("JustConvertIt")
+        box.setText(message)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.exec()
+        if created:
+            app.quit()
+    except Exception:
+        pass
 
 
 def _run_smoke_convert(operation_id: str, source: Path, destination: Path) -> int:
@@ -99,6 +148,7 @@ def _install_signal_handlers(app: QApplication) -> QTimer:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _ensure_stdio()
     argv = list(sys.argv if argv is None else argv)
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument(
@@ -114,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _enable_high_dpi()
     _configure_windows_identity()
-    faulthandler.enable()
+    _enable_faulthandler()
     setup_logging()
     install_exception_hooks()
 
@@ -133,7 +183,10 @@ def main(argv: list[str] | None = None) -> int:
         app = QApplication([argv[0], *qt_argv])
     except Exception:
         log.exception("Could not start the display")
-        print("justconvertit could not open a display window.", file=sys.stderr)
+        _show_fatal_dialog(
+            "JustConvertIt could not open a display window.\n\n"
+            "Check your graphics drivers and try again."
+        )
         return 1
     app.setApplicationName("justconvertit")
     app.setApplicationVersion(__version__)
@@ -158,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         window = MainWindow(get_registry(), settings_store=settings_store)
     except Exception:
         log.exception("Main window failed to open")
-        print("justconvertit could not open the main window.", file=sys.stderr)
+        _show_fatal_dialog(_USER_STARTUP_ERROR)
         return 1
     set_ui_error_reporter(window._set_status)
     window.show()
@@ -167,6 +220,10 @@ def main(argv: list[str] | None = None) -> int:
         code = app.exec()
     except Exception:
         log.exception("Event loop crashed; exiting cleanly")
+        _show_fatal_dialog(
+            "JustConvertIt hit an unexpected problem and needs to close.\n\n"
+            "Your files were not uploaded. Try opening the app again."
+        )
         code = 1
     try:
         window.jobs.shutdown()
@@ -177,4 +234,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _ensure_stdio()
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        # Never let a raw traceback reach the PyInstaller error dialog.
+        try:
+            logging.getLogger("omniconvert").exception("Fatal startup error")
+        except Exception:
+            pass
+        _show_fatal_dialog(_USER_STARTUP_ERROR)
+        raise SystemExit(1)
