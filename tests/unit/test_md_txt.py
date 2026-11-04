@@ -52,6 +52,22 @@ def test_txt_to_md_preserves_text(registry: ConversionRegistry, tmp_path: Path) 
     assert detect_file(out).format_id is FormatId.MD
 
 
+def test_txt_to_md_normalizes_windows_crlf(
+    registry: ConversionRegistry, tmp_path: Path
+) -> None:
+    """Windows text files often store CRLF; output must not become blank-line doubled."""
+    src = tmp_path / "crlf.txt"
+    src.write_bytes(b"Line one\r\nLine two\r\n")
+    out = tmp_path / "crlf.md"
+    registry.convert(
+        operation_id="text.txt_to_md",
+        source=src,
+        destination=out,
+        settings={},
+    )
+    assert out.read_bytes() == b"Line one\nLine two\n"
+
+
 def test_md_ops_registered(registry: ConversionRegistry) -> None:
     ids = {op.operation_id for op in registry.available_operations_for(FormatId.MD)}
     assert "text.md_to_txt" in ids

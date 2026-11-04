@@ -31,10 +31,20 @@ def _read_text(path: Path) -> str:
     raw = path.read_bytes()
     for enc in ("utf-8-sig", "utf-8", "utf-16", "latin-1"):
         try:
-            return raw.decode(enc)
+            text = raw.decode(enc)
+            break
         except UnicodeDecodeError:
             continue
-    raise ValidationError("Could not decode text file with a supported encoding.")
+    else:
+        raise ValidationError("Could not decode text file with a supported encoding.")
+    # Normalize newlines so Windows CRLF inputs don't become \r\r\n on rewrite.
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _write_text(path: Path, text: str) -> None:
+    """Write UTF-8 text with LF newlines (binary) — safe on Windows and Linux."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    path.write_bytes(normalized.encode("utf-8"))
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -225,9 +235,9 @@ class TextOpsConverter(Converter):
                 indent = int(settings.get("indent", 2))
                 indent = max(0, min(8, indent))
                 with AtomicWriter(destination) as tmp:
-                    Path(tmp).write_text(
+                    _write_text(
+                        Path(tmp),
                         json.dumps(data, indent=indent, ensure_ascii=False) + "\n",
-                        encoding="utf-8",
                     )
                 msg = "JSON validated and formatted."
             elif operation_id in {"text.txt_to_pdf", "text.json_to_pdf"}:
@@ -245,19 +255,19 @@ class TextOpsConverter(Converter):
                 text = markdown_to_plain(_read_text(source))
                 check_cancelled(is_cancelled)
                 with AtomicWriter(destination) as tmp:
-                    Path(tmp).write_text(text, encoding="utf-8")
+                    _write_text(Path(tmp), text)
                 msg = "Markdown converted to plain text."
             elif operation_id == "text.txt_to_md":
                 text = _read_text(source)
                 check_cancelled(is_cancelled)
                 with AtomicWriter(destination) as tmp:
-                    Path(tmp).write_text(text, encoding="utf-8")
+                    _write_text(Path(tmp), text)
                 msg = "Plain text saved as Markdown."
             elif operation_id == "text.html_to_txt":
                 text = html_to_plain(_read_text(source))
                 check_cancelled(is_cancelled)
                 with AtomicWriter(destination) as tmp:
-                    Path(tmp).write_text(text, encoding="utf-8")
+                    _write_text(Path(tmp), text)
                 msg = "Extracted text from HTML."
             else:
                 raise ConversionFailedError("Unknown text operation.")
