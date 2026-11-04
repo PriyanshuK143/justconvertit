@@ -92,6 +92,40 @@ def test_pdf_merge(registry: ConversionRegistry, sample_txt: Path, tmp_path: Pat
     assert len(PdfReader(str(result.output_path)).pages) == 2
 
 
+def test_pdf_merge_operation(registry: ConversionRegistry, sample_txt: Path, tmp_path: Path) -> None:
+    pdf1 = tmp_path / "a.pdf"
+    pdf2 = tmp_path / "b.pdf"
+    registry.convert(operation_id="text.txt_to_pdf", source=sample_txt, destination=pdf1, settings={})
+    registry.convert(operation_id="text.txt_to_pdf", source=sample_txt, destination=pdf2, settings={})
+    out = tmp_path / "via_op.pdf"
+    registry.convert(
+        operation_id="pdf.merge",
+        source=pdf1,
+        destination=out,
+        settings={"merge_paths": [str(pdf2)]},
+    )
+    assert len(PdfReader(str(out)).pages) == 2
+
+
+def test_pdf_extract_pages(registry: ConversionRegistry, sample_txt: Path, tmp_path: Path) -> None:
+    pdf1 = tmp_path / "p1.pdf"
+    pdf2 = tmp_path / "p2.pdf"
+    registry.convert(operation_id="text.txt_to_pdf", source=sample_txt, destination=pdf1, settings={})
+    registry.convert(operation_id="text.txt_to_pdf", source=sample_txt, destination=pdf2, settings={})
+    merged = tmp_path / "both.pdf"
+    merge_pdfs([pdf1, pdf2], merged)
+    assert len(PdfReader(str(merged)).pages) == 2
+
+    page1 = tmp_path / "only1.pdf"
+    registry.convert(
+        operation_id="pdf.extract_pages",
+        source=merged,
+        destination=page1,
+        settings={"first_page": 1, "last_page": 1},
+    )
+    assert len(PdfReader(str(page1)).pages) == 1
+
+
 def test_unicode_path(registry: ConversionRegistry, sample_png: Path, tmp_path: Path) -> None:
     folder = tmp_path / "папка-文件"
     folder.mkdir()

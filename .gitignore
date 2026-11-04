@@ -32,6 +32,7 @@ Thumbs.db
 # Packaging artifacts
 packaging/windows/Output/
 packaging/linux/*.AppImage
+build/deb/
 *.spec.bak
 /OmniConvert.spec
 /OmniConvert-*.sha256

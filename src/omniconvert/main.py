@@ -17,6 +17,11 @@ from PySide6.QtWidgets import QApplication
 from omniconvert.core.registry import get_registry
 from omniconvert.services.dependencies import get_dependency_service
 from omniconvert.services.logging_setup import setup_logging
+from omniconvert.services.resilience import (
+    install_exception_hooks,
+    install_qt_message_silence,
+    set_ui_error_reporter,
+)
 from omniconvert.services.settings import SettingsStore
 from omniconvert.ui.main_window import MainWindow
 from omniconvert.ui.theme import apply_theme
@@ -111,18 +116,34 @@ def main(argv: list[str] | None = None) -> int:
     _configure_windows_identity()
     faulthandler.enable()
     setup_logging()
+    install_exception_hooks()
 
     settings_store = SettingsStore()
-    settings = settings_store.load()
+    try:
+        settings = settings_store.load()
+    except Exception:  # noqa: BLE001 — never die on corrupt settings
+        log.exception("Settings load failed; using defaults")
+        from omniconvert.services.settings import AppSettings
+
+        settings = AppSettings()
 
     # Create Qt first so a bad display fails fast; keep startup free of
     # Snap LibreOffice --version (multi-second) and heavy converter imports.
-    app = QApplication([argv[0], *qt_argv])
+    try:
+        app = QApplication([argv[0], *qt_argv])
+    except Exception:
+        log.exception("Could not start the display")
+        print("justconvertit could not open a display window.", file=sys.stderr)
+        return 1
     app.setApplicationName("justconvertit")
     app.setApplicationVersion(__version__)
     app.setOrganizationName("justconvertit")
     app.setWindowIcon(_app_icon())
-    apply_theme(app, settings.theme)
+    install_qt_message_silence()
+    try:
+        apply_theme(app, settings.theme)
+    except Exception:
+        log.exception("Theme apply failed; continuing")
     app.setQuitOnLastWindowClosed(True)
 
     app._omniconvert_signal_timer = _install_signal_handlers(app)  # type: ignore[attr-defined]
@@ -133,11 +154,25 @@ def main(argv: list[str] | None = None) -> int:
         probe_versions=False,
     )
 
-    window = MainWindow(get_registry(), settings_store=settings_store)
+    try:
+        window = MainWindow(get_registry(), settings_store=settings_store)
+    except Exception:
+        log.exception("Main window failed to open")
+        print("justconvertit could not open the main window.", file=sys.stderr)
+        return 1
+    set_ui_error_reporter(window._set_status)
     window.show()
     log.info("justconvertit %s started", __version__)
-    code = app.exec()
-    window.jobs.shutdown()
+    try:
+        code = app.exec()
+    except Exception:
+        log.exception("Event loop crashed; exiting cleanly")
+        code = 1
+    try:
+        window.jobs.shutdown()
+    except Exception:
+        log.exception("Shutdown cleanup failed")
+    set_ui_error_reporter(None)
     return int(code)
 
 

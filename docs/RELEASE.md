@@ -6,9 +6,9 @@ justconvertit ships as a **one-time install**. There is no automatic update chec
 
 | Artifact | Platform | Contents |
 |----------|----------|----------|
-| `justconvertit-<ver>-linux-x86_64.tar.gz` | Ubuntu | PyInstaller folder + `INSTALL.md` + `PRIVACY.md` + checksums |
+| `justconvertit_<ver>_amd64.deb` | Ubuntu | Debian package (`/opt/justconvertit`, desktop entry, icon) |
 | `justconvertit-<ver>-Setup.exe` | Windows | Inno Setup installer wrapping the PyInstaller tree |
-| `justconvertit-<ver>-*.sha256` | both | SHA-256 checksums of the published files |
+| `justconvertit_<ver>_amd64.sha256` / `justconvertit-<ver>-*.sha256` | both | SHA-256 checksums of the published files |
 | Release notes | both | From `CHANGELOG.md` for that tag |
 
 Also link from the release page:
@@ -43,15 +43,17 @@ Windows (on a Windows host):
 # Then compile packaging\windows\installer.iss with Inno Setup
 ```
 
-## Linux archive (produced by build script)
+## Linux package (produced by build script)
 
 `bash scripts/build_linux.sh` writes:
 
-- `dist/justconvertit/` — runnable folder including `install.sh` / `uninstall.sh`
-- `dist/justconvertit-<ver>-linux-<arch>.tar.gz` — shareable archive
-- `dist/justconvertit-<ver>-linux-<arch>.sha256` — checksum
+- `dist/justconvertit/` — PyInstaller folder (intermediate)
+- `dist/justconvertit_<ver>_amd64.deb` — end-user installer
+- `dist/justconvertit_<ver>_amd64.sha256` — checksum
 
-Publish the `.tar.gz` and `.sha256` on the release page. Users extract and run `./install.sh`.
+(`scripts/build_deb.sh` can be run alone if the folder already exists.)
+
+Publish the `.deb` and `.sha256` on the release page. Users install with App Center or `sudo apt install ./….deb`.
 
 ## Dependency inventory
 

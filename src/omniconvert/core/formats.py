@@ -12,7 +12,11 @@ class FormatId(str, Enum):
     WEBP = "webp"
     BMP = "bmp"
     TIFF = "tiff"
+    GIF = "gif"
+    SVG = "svg"
     TXT = "txt"
+    MD = "md"
+    HTML = "html"
     JSON = "json"
     CSV = "csv"
     PDF = "pdf"
@@ -40,7 +44,11 @@ class FormatId(str, Enum):
             FormatId.WEBP: "WEBP",
             FormatId.BMP: "BMP",
             FormatId.TIFF: "TIFF",
+            FormatId.GIF: "GIF",
+            FormatId.SVG: "SVG",
             FormatId.TXT: "TXT",
+            FormatId.MD: "MD",
+            FormatId.HTML: "HTML",
             FormatId.JSON: "JSON",
             FormatId.CSV: "CSV",
             FormatId.PDF: "PDF",
@@ -60,7 +68,10 @@ class FormatId(str, Enum):
 IMAGE_FORMATS = frozenset(
     {FormatId.PNG, FormatId.JPEG, FormatId.WEBP, FormatId.BMP, FormatId.TIFF}
 )
-TEXT_FORMATS = frozenset({FormatId.TXT, FormatId.JSON, FormatId.CSV})
+TEXT_FORMATS = frozenset(
+    {FormatId.TXT, FormatId.MD, FormatId.HTML, FormatId.JSON, FormatId.CSV}
+)
+FRAME_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp"})
 
 
 @dataclass(frozen=True, slots=True)

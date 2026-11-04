@@ -17,6 +17,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -42,6 +44,7 @@ from omniconvert.platform.reveal import open_path, reveal_in_file_manager
 from omniconvert.services.dependencies import get_dependency_service
 from omniconvert.services.engine_setup import needs_engine_setup
 from omniconvert.services.jobs import JobManager
+from omniconvert.services.resilience import call_soft, safe_slot
 from omniconvert.services.settings import AppSettings, SettingsStore
 from omniconvert.ui.dialogs import (
     AboutDialog,
@@ -110,6 +113,13 @@ class _OptionsPopup(QDialog):
             )
             box.setValue(int(default))
             return box
+        if spec.kind == "choice" and spec.choices:
+            combo = QComboBox()
+            combo.addItems(list(spec.choices))
+            current = str(spec.default)
+            idx = combo.findText(current)
+            combo.setCurrentIndex(max(0, idx))
+            return combo
         edit = QLineEdit(str(spec.default))
         if spec.key == "transparency_background":
             edit.setText(app_settings.transparency_background)
@@ -121,6 +131,8 @@ class _OptionsPopup(QDialog):
             w = self._widgets.get(spec.key)
             if isinstance(w, QSpinBox):
                 out[spec.key] = w.value()
+            elif isinstance(w, QComboBox):
+                out[spec.key] = w.currentText()
             elif isinstance(w, QLineEdit):
                 out[spec.key] = w.text()
             else:
@@ -153,10 +165,16 @@ class MainWindow(QWidget):
         self._selected_op: ConversionOperation | None = None
         self._last_output: Path | None = None
         self._output_dir: Path | None = None
+        self._batch_paths: list[Path] = []
+        self._batch_active = False
+        self._batch_ok = 0
+        self._batch_fail = 0
         self._always_on_top = True
         self._hover_chrome = False
         self._status_text = "Click center to open"
         self._status_kind = "info"
+        # Last known on-screen top-left (Wayland/X11 often report 0,0 wrongly).
+        self._anchor_pos: QPoint | None = None
 
         self.setWindowTitle(f"{APP_NAME} {__version__}")
         self.setObjectName("desktopOrb")
@@ -182,26 +200,77 @@ class MainWindow(QWidget):
         s = self._orb_size
         self.setMask(QRegion(QRect(0, 0, s, s), QRegion.RegionType.Ellipse))
 
+    def _remember_anchor(self) -> None:
+        """Store a believable top-left so resize does not jump to 0,0."""
+        geo = self.frameGeometry()
+        if geo.width() < 1 or geo.height() < 1:
+            return
+        # (0,0) is usually a fake Wayland/XWayland reading, not a real place.
+        if geo.x() == 0 and geo.y() == 0 and self._anchor_pos is not None:
+            return
+        if geo.x() == 0 and geo.y() == 0:
+            return
+        self._anchor_pos = QPoint(geo.x(), geo.y())
+
+    def _ensure_on_screen(self) -> None:
+        """Clamp the orb fully into the available screen (fixes left-edge clip)."""
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        geo = self.frameGeometry()
+        w, h = geo.width(), geo.height()
+        if w < 1 or h < 1:
+            return
+        x = geo.x()
+        y = geo.y()
+        # Prefer remembered anchor when current coords look fake.
+        if x == 0 and y == 0 and self._anchor_pos is not None:
+            x, y = self._anchor_pos.x(), self._anchor_pos.y()
+        x = max(avail.left(), min(x, avail.right() - w + 1))
+        y = max(avail.top(), min(y, avail.bottom() - h + 1))
+        if x != geo.x() or y != geo.y():
+            self.move(x, y)
+        self._anchor_pos = QPoint(x, y)
+
     def _set_orb_size(self, size: int) -> None:
-        """Resize the circular window while keeping its center fixed on screen."""
+        """Resize the circular window without jumping off-screen."""
         if size == self._orb_size:
             self._apply_circle_mask()
             self._position_close_btn()
             return
-        cx = self.x() + self._orb_size // 2
-        cy = self.y() + self._orb_size // 2
+
+        from PySide6.QtGui import QGuiApplication
+
+        wayland = QGuiApplication.platformName().lower().startswith("wayland")
+        old = self._orb_size
+        self._remember_anchor()
+
+        # Prefer real frame geometry; fall back to last good anchor.
+        geo = self.frameGeometry()
+        if (geo.x() == 0 and geo.y() == 0) and self._anchor_pos is not None:
+            old_tl = QPoint(self._anchor_pos)
+        else:
+            old_tl = QPoint(geo.x(), geo.y())
+        cx = old_tl.x() + old // 2
+        cy = old_tl.y() + old // 2
+
         self._orb_size = size
         self.setFixedSize(size, size)
         self.wheel.setFixedSize(size, size)
         self._apply_circle_mask()
-        self.move(cx - size // 2, cy - size // 2)
+
+        # Keep visual center stable when the platform allows move(); always clamp.
+        if not wayland or self._anchor_pos is not None:
+            self.move(int(cx - size // 2), int(cy - size // 2))
+        self._ensure_on_screen()
         self._position_close_btn()
 
     def _position_close_btn(self) -> None:
         """Pin × to the upper-right of the painted hub (not the outer empty rim)."""
         s = self._orb_size
         outer = s / 2.0 - 6.0
-        hub_r = outer * (0.38 if self.detected is not None else 0.52)
+        hub_r = outer * (0.42 if self.detected is not None else 0.52)
         cx = cy = s / 2.0
         # Upper-right on the hub rim, inset so the circular mask still covers it.
         bx = int(cx + hub_r * 0.55 - 6)
@@ -216,6 +285,7 @@ class MainWindow(QWidget):
         self.wheel = RadialWheel()
         self.wheel.setFixedSize(HUB_SIZE, HUB_SIZE)
         self.wheel.set_transparent_background(True)
+        self.wheel.set_center_text(APP_NAME, "Click or drop a file")
         layout.addWidget(self.wheel)
 
         self.close_btn = QPushButton("×", self)
@@ -260,13 +330,19 @@ class MainWindow(QWidget):
     def _connect(self) -> None:
         self.wheel.openRequested.connect(self.open_file_dialog)
         self.wheel.fileDropped.connect(self.load_path)
+        self.wheel.filesDropped.connect(self.load_paths)
         self.wheel.formatSelected.connect(self._on_format_selected_deferred)
-        self.wheel.windowDragMoved.connect(self.move)
+        self.wheel.windowDragMoved.connect(self._on_window_drag_moved)
         self.jobs.job_progress.connect(self._on_progress)
         self.jobs.job_succeeded.connect(self._on_success)
         self.jobs.job_failed.connect(self._on_failure)
         self.jobs.job_cancelled.connect(self._on_cancelled)
         self.jobs.busy_changed.connect(self._on_busy)
+        self.jobs.batch_progress.connect(self._on_batch_progress)
+
+    def _on_window_drag_moved(self, top_left: QPoint) -> None:
+        self.move(top_left)
+        self._anchor_pos = QPoint(top_left)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.jobs.shutdown()
@@ -291,6 +367,8 @@ class MainWindow(QWidget):
             return
         geo = screen.availableGeometry()
         self.move(geo.right() - self.width() - 24, geo.bottom() - self.height() - 48)
+        self._remember_anchor()
+        self._ensure_on_screen()
 
     def paintEvent(self, event) -> None:  # noqa: N802
         _ = event
@@ -313,11 +391,14 @@ class MainWindow(QWidget):
 
     def _show_context_menu(self, pos: QPoint) -> None:
         menu = QMenu(self)
+        menu.addAction("Open file…", self.open_file_dialog)
+        menu.addAction("Open multiple…", self.open_multiple_dialog)
         recent = menu.addAction("Open recent file", self._open_recent_converted)
         recent.setEnabled(self._recent_converted_path() is not None)
         if self._last_output and self._last_output.exists():
             menu.addAction("Show in folder", self._reveal_result)
         menu.addSeparator()
+        menu.addAction("Merge PDFs…", self._merge_pdfs_dialog)
         menu.addAction("Choose output folder…", self._browse_output)
         menu.addAction("Settings…", self.open_settings)
         top_act = menu.addAction("Always on top")
@@ -381,10 +462,68 @@ class MainWindow(QWidget):
         if path:
             QTimer.singleShot(0, lambda p=path: self.load_path(p))
 
+    def open_multiple_dialog(self) -> None:
+        was_on_top = self._always_on_top
+        if was_on_top:
+            self._set_always_on_top(False)
+        try:
+            paths, _ = QFileDialog.getOpenFileNames(
+                self,
+                f"Open multiple — {APP_NAME}",
+                str(Path.home()),
+            )
+        finally:
+            if was_on_top:
+                self._set_always_on_top(True)
+            self.raise_()
+            self.activateWindow()
+        if paths:
+            QTimer.singleShot(0, lambda p=list(paths): self.load_paths(p))
+
+    @safe_slot(user_message="Could not open those files.")
+    def load_paths(self, paths: list) -> None:
+        cleaned = [str(p) for p in paths if str(p).strip()]
+        if not cleaned:
+            return
+        if len(cleaned) == 1:
+            self.load_path(cleaned[0])
+            return
+        if self.jobs.is_busy:
+            self._set_status("Busy — cancel first (right-click)", "err")
+            return
+        detected_list: list[tuple[Path, DetectedFile]] = []
+        for raw in cleaned:
+            try:
+                path = Path(raw).resolve()
+                detected_list.append((path, detect_file(path)))
+            except AppError as exc:
+                self._set_status(exc.user_message, "err")
+                return
+            except OSError as exc:
+                self._set_status(f"Could not read file: {exc}", "err")
+                return
+        formats = {d.format_id for _, d in detected_list}
+        if len(formats) != 1:
+            self._set_status("Batch needs the same file type", "err")
+            return
+        first_path, first_det = detected_list[0]
+        self._batch_paths = [p for p, _ in detected_list]
+        self.load_path(str(first_path))
+        # Restore batch list after load_path clears it
+        self._batch_paths = [p for p, _ in detected_list]
+        n = len(self._batch_paths)
+        self.wheel.set_center_text(
+            f"{n} files",
+            f"{first_det.format_id.label} · batch",
+        )
+        self._set_status(f"Batch · {n} files — pick a conversion", "info")
+
+    @safe_slot(user_message="Could not open that file.")
     def load_path(self, path: str) -> None:
         if self.jobs.is_busy:
             self._set_status("Busy — cancel first (right-click)", "err")
             return
+        self._batch_paths = []
         self._set_status("Opening…", "info")
         QApplication.processEvents()
         try:
@@ -439,6 +578,7 @@ class MainWindow(QWidget):
     def _on_format_selected_deferred(self, operation_id: str) -> None:
         QTimer.singleShot(0, lambda: self._on_format_selected(operation_id))
 
+    @safe_slot(user_message="Couldn't start that conversion.")
     def _on_format_selected(self, operation_id: str) -> None:
         if not self.detected or not self._source_path:
             return
@@ -453,7 +593,36 @@ class MainWindow(QWidget):
 
         self._selected_op = op
         settings = self._default_settings(op)
-        if op.settings:
+
+        # Merge+ pad: pick additional PDFs then save once.
+        if op.operation_id == "pdf.merge":
+            extras = self._pick_merge_extras()
+            if extras is None:
+                self._set_status("Cancelled", "info")
+                return
+            if not extras:
+                self._set_status("Pick at least one more PDF to merge", "err")
+                return
+            settings["merge_paths"] = [str(p) for p in extras]
+
+        if op.operation_id == "image.crop" and self._source_path is not None:
+            if len(self._batch_paths) > 1:
+                self._set_status("Crop works on one image at a time", "err")
+                return
+            from omniconvert.ui.crop_dialog import ImageCropDialog
+
+            try:
+                popup = ImageCropDialog(self._source_path, None)
+            except Exception:  # noqa: BLE001
+                log.exception("Crop preview failed")
+                self._set_status("Could not open crop preview for that image.", "err")
+                return
+            popup.setStyleSheet(self.styleSheet())
+            if popup.exec() != QDialog.DialogCode.Accepted:
+                self._set_status("Cancelled", "info")
+                return
+            settings.update(popup.values())
+        elif op.settings and op.operation_id != "pdf.merge":
             popup = _OptionsPopup(op, self.settings, None)
             popup.setStyleSheet(self.styleSheet())
             if popup.exec() != QDialog.DialogCode.Accepted:
@@ -461,8 +630,31 @@ class MainWindow(QWidget):
                 return
             settings.update(popup.values())
 
-        # Always ask for rename + location; default folder = uploaded file path.
+        batch = [p for p in self._batch_paths if p.is_file()]
+        use_batch = len(batch) > 1 and op.supports_batch and op.operation_id != "pdf.merge"
+        if len(batch) > 1 and not use_batch and op.operation_id != "pdf.merge":
+            self._set_status("That conversion does not support batch", "err")
+            return
+
         default_dir = self._output_dir or self._source_path.parent
+        if use_batch:
+            out_dir = QFileDialog.getExistingDirectory(
+                None,
+                f"Output folder for {len(batch)} files — {APP_NAME}",
+                str(default_dir),
+            )
+            if not out_dir:
+                self._set_status("Cancelled", "info")
+                return
+            out_path = Path(out_dir)
+            if not is_writable_dir(out_path):
+                self._set_status("Output folder is not writable", "err")
+                return
+            self._output_dir = out_path
+            self._start_batch(batch, settings, out_dir=out_path)
+            return
+
+        # Always ask for rename + location; default folder = uploaded file path.
         default_name = default_output_name(self._source_path, op.target_format)
         save = SaveAsDialog(
             title=f"Save as {op.target_format.label}",
@@ -509,6 +701,7 @@ class MainWindow(QWidget):
         name = out_name or default_output_name(
             Path(self.detected.path), self._selected_op.target_format
         )
+        self._batch_active = False
         try:
             self.jobs.start(
                 source_path=Path(self.detected.path),
@@ -522,46 +715,232 @@ class MainWindow(QWidget):
         except RuntimeError as exc:
             self._set_status(str(exc), "err")
 
+    def _start_batch(
+        self,
+        paths: list[Path],
+        settings: dict,
+        *,
+        out_dir: Path,
+    ) -> None:
+        if not self.detected or not self._selected_op:
+            return
+        op = self._selected_op
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._set_status(f"Bad output folder: {exc}", "err")
+            return
+        specs: list[dict] = []
+        for path in paths:
+            specs.append(
+                {
+                    "source_path": path,
+                    "source_format": self.detected.format_id,
+                    "target_format": op.target_format.value,
+                    "output_dir": out_dir,
+                    "output_name": default_output_name(path, op.target_format),
+                    "settings": dict(settings),
+                    "operation_id": op.operation_id,
+                }
+            )
+        self._batch_active = True
+        self._batch_ok = 0
+        self._batch_fail = 0
+        try:
+            self.jobs.start_batch(specs)
+        except RuntimeError as exc:
+            self._batch_active = False
+            self._set_status(str(exc), "err")
+
+    def _pick_merge_extras(self) -> list[Path] | None:
+        """Return additional PDFs, or None if cancelled."""
+        was_on_top = self._always_on_top
+        if was_on_top:
+            self._set_always_on_top(False)
+        try:
+            paths, _ = QFileDialog.getOpenFileNames(
+                self,
+                f"Add PDFs to merge — {APP_NAME}",
+                str(self._source_path.parent if self._source_path else Path.home()),
+                "PDF files (*.pdf)",
+            )
+        finally:
+            if was_on_top:
+                self._set_always_on_top(True)
+            self.raise_()
+            self.activateWindow()
+        if paths is None:
+            return None
+        # Empty list means user closed with no selection — treat as cancel if dialog returns [].
+        # getOpenFileNames returns [] on cancel.
+        return [Path(p) for p in paths]
+
+    @safe_slot(user_message="Could not merge PDFs.")
+    def _merge_pdfs_dialog(self) -> None:
+        if self.jobs.is_busy:
+            self._set_status("Busy — cancel first (right-click)", "err")
+            return
+        was_on_top = self._always_on_top
+        if was_on_top:
+            self._set_always_on_top(False)
+        try:
+            paths, _ = QFileDialog.getOpenFileNames(
+                self,
+                f"Merge PDFs — {APP_NAME}",
+                str(Path.home()),
+                "PDF files (*.pdf)",
+            )
+        finally:
+            if was_on_top:
+                self._set_always_on_top(True)
+            self.raise_()
+            self.activateWindow()
+        if not paths or len(paths) < 2:
+            self._set_status("Select at least two PDFs to merge", "err")
+            return
+        first = Path(paths[0])
+        try:
+            detected = detect_file(first)
+        except AppError as exc:
+            self._set_status(exc.user_message, "err")
+            return
+        self.detected = detected
+        self._source_path = first.resolve()
+        self._batch_paths = []
+        try:
+            op = self.registry.get_operation("pdf.merge")
+        except AppError as exc:
+            self._set_status(exc.user_message, "err")
+            return
+        self._selected_op = op
+        settings = self._default_settings(op)
+        settings["merge_paths"] = [str(Path(p).resolve()) for p in paths[1:]]
+        default_dir = first.parent
+        save = SaveAsDialog(
+            title="Save merged PDF",
+            default_dir=default_dir,
+            default_name="merged.pdf",
+            parent=None,
+        )
+        save.setStyleSheet(self.styleSheet())
+        if save.exec() != QDialog.DialogCode.Accepted:
+            self._set_status("Cancelled", "info")
+            return
+        out_dir, out_name = save.result_path_parts()
+        if not is_writable_dir(out_dir):
+            self._set_status("Output folder is not writable", "err")
+            return
+        self._output_dir = out_dir
+        self._start_conversion(settings, out_dir=out_dir, out_name=out_name)
+
+    @safe_slot(user_message="Conversion update failed.")
     def _on_progress(self, job_id: str, fraction: object, message: str) -> None:
         _ = job_id
         if fraction is None:
             self._set_status(message or "Working…", "info")
         else:
-            pct = int(float(fraction) * 100)
+            try:
+                pct = int(float(fraction) * 100)
+            except (TypeError, ValueError):
+                pct = 0
             self._set_status(f"{pct}% · {message or 'Working…'}", "info")
 
+    @safe_slot(user_message="Batch update failed.")
+    def _on_batch_progress(self, done: int, total: int, message: str) -> None:
+        if total <= 0:
+            return
+        self._set_status(message or f"Batch {done}/{total}", "info")
+
+    @safe_slot(user_message="Saved, but the finish step had a glitch.")
     def _on_success(self, job_id: str, path: str, message: str) -> None:
         _ = job_id, message
         self._last_output = Path(path)
-        self._set_status(f"Done · {Path(path).name}", "ok")
-        self.settings_store.add_history(
-            self.settings,
-            source_name=Path(path).name,
-            target_format=self._selected_op.target_format.value if self._selected_op else "",
-            output_path=path,
-            status="succeeded",
+        out = Path(path)
+        call_soft(
+            lambda: self.settings_store.add_history(
+                self.settings,
+                source_name=out.name,
+                target_format=(
+                    self._selected_op.target_format.value if self._selected_op else ""
+                ),
+                output_path=path,
+                status="succeeded",
+            )
         )
-        QTimer.singleShot(3000, lambda: self._set_status("Right-click · open result", "info"))
+        if self._batch_active:
+            self._batch_ok += 1
+            self._set_status(f"Batch · saved {out.name}", "ok")
+            return
 
+        self._set_status(f"Done · {out.name}", "ok")
+        # Ask whether to open the converted file (Yes / No).
+        reply = QMessageBox.question(
+            self,
+            "Conversion complete",
+            f"Saved:\n{out.name}\n\nOpen the file now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes and out.exists():
+            try:
+                open_path(out)
+            except Exception:  # noqa: BLE001
+                log.exception("open_path after convert failed")
+                self._set_status("Saved — could not open the file automatically.", "info")
+        else:
+            QTimer.singleShot(2500, lambda: self._set_status("Right-click · open result", "info"))
+
+    @safe_slot(user_message="Conversion failed.")
     def _on_failure(self, job_id: str, message: str) -> None:
         _ = job_id
-        self._set_status(message, "err")
-        self.settings_store.add_history(
-            self.settings,
-            source_name=self.detected.display_name if self.detected else "",
-            target_format=self._selected_op.target_format.value if self._selected_op else "",
-            output_path="",
-            status="failed",
+        if self._batch_active:
+            self._batch_fail += 1
+        self._set_status(message or "Conversion failed.", "err")
+        call_soft(
+            lambda: self.settings_store.add_history(
+                self.settings,
+                source_name=self.detected.display_name if self.detected else "",
+                target_format=(
+                    self._selected_op.target_format.value if self._selected_op else ""
+                ),
+                output_path="",
+                status="failed",
+            )
         )
 
+    @safe_slot(user_message="Cancelled.")
     def _on_cancelled(self, job_id: str) -> None:
         _ = job_id
+        self._batch_active = False
         self._set_status("Cancelled", "info")
 
+    @safe_slot(user_message="UI update glitch — keep going.")
     def _on_busy(self, busy: bool) -> None:
         self.wheel.set_wheel_enabled(not busy and bool(self._current_ops))
         if busy:
             self._set_status("Converting…", "info")
+            return
+        if self._batch_active:
+            ok, fail = self._batch_ok, self._batch_fail
+            self._batch_active = False
+            self._batch_paths = []
+            summary = f"Batch done · {ok} ok"
+            if fail:
+                summary += f", {fail} failed"
+            self._set_status(summary, "ok" if fail == 0 else "err")
+            if self._last_output and self._last_output.exists() and ok > 0:
+                reply = QMessageBox.question(
+                    self,
+                    "Batch complete",
+                    f"{summary}.\n\nOpen the last output file?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    try:
+                        open_path(self._last_output)
+                    except Exception:  # noqa: BLE001
+                        log.exception("open_path after batch failed")
 
     def _set_status(self, text: str, kind: str) -> None:
         self._status_text = text

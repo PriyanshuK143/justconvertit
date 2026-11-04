@@ -1,40 +1,56 @@
-; Inno Setup script — compile on Windows after PyInstaller build.
-; Paths assume dist\justconvertit from repo root.
-; Offline-first: no updater helpers, no download URLs, no AppMutex phone-home.
+; Inno Setup 6 — compile on Windows after PyInstaller:
+;   pyinstaller --noconfirm --clean packaging/windows/omniconvert.spec
+;   ISCC packaging/windows/installer.iss
+;
+; Friend-friendly defaults: per-user install (no admin), Start Menu + optional desktop icon.
+; Offline-first: no updater, no download URLs, no phone-home.
 
-#define MyAppName "justconvertit"
+#define MyAppName "JustConvertIt"
 #define MyAppVersion "0.1.0"
-#define MyAppPublisher "justconvertit Contributors"
+#define MyAppPublisher "JustConvertIt Contributors"
 #define MyAppExeName "justconvertit.exe"
 
 [Setup]
-AppId={{A8C3E2F1-4B7D-4E9A-9C21-JUSTCONVERT01}
+; Valid GUID required (hex only in each segment).
+AppId={{A8C3E2F1-4B7D-4E9A-9C21-A1B2C3D4E5F6}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppSupportURL=
 AppUpdatesURL=
-DefaultDirName={autopf}\{#MyAppName}
+DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
+DisableReadyPage=no
+AllowNoIcons=yes
 OutputDir=Output
-OutputBaseFilename=justconvertit-{#MyAppVersion}-Setup
-Compression=lzma
+OutputBaseFilename=JustConvertIt-{#MyAppVersion}-Setup
+Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+; Per-user install — friends do not need Administrator.
 PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+MinVersion=10.0
 UninstallDisplayName={#MyAppName}
 SetupIconFile=omniconvert.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
-InfoBeforeFile=..\..\docs\PRIVACY.md
-VersionInfoVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppVersion}.0
 VersionInfoProductName={#MyAppName}
+VersionInfoCompany={#MyAppPublisher}
+CloseApplications=yes
+RestartApplications=no
+; Short privacy blurb instead of dumping full PRIVACY.md into the wizard.
+InfoBeforeFile=install_info.txt
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Additional icons:"
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: checkedonce
 
 [Files]
 Source: "..\..\dist\justconvertit\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -44,9 +60,12 @@ Source: "..\..\docs\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignorevers
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch justconvertit"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch JustConvertIt"; Flags: nowait postinstall skipifsilent unchecked
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}"

@@ -1,0 +1,7 @@
+JustConvertIt — offline file converter
+
+• Works without an internet connection after install
+• Does not upload your files or require an account
+• Optional tools (LibreOffice / FFmpeg) can be installed later from Settings if you want Office or audio conversions
+
+Click Next to install. No administrator password is required for the default install.

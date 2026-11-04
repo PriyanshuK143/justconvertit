@@ -1,51 +1,33 @@
 # Linux packaging
 
-End users should never need this folder. They download a release archive and run `./install.sh`.
+End users install the **`.deb`**. They never need this folder or an install script.
 
-## What a release archive contains
+## End-user artifact
 
 ```
-justconvertit/
-  justconvertit          # app binary (PyInstaller)
-  _internal/             # bundled runtime
-  install.sh             # one-step user install
-  uninstall.sh
-  icons/justconvertit.png
-  INSTALL.md
-  PRIVACY.md
-  LICENSE
+dist/justconvertit_<version>_amd64.deb
+dist/justconvertit_<version>_amd64.sha256
 ```
+
+Install: double-click / App Center, or `sudo apt install ./justconvertit_0.1.0_amd64.deb`
 
 ## Build (maintainers)
 
 ```bash
-bash scripts/build_linux.sh
-# produces:
-#   dist/justconvertit/                          # runnable tree
-#   dist/justconvertit-0.1.0-linux-x86_64.tar.gz
-#   dist/justconvertit-0.1.0-linux-x86_64.sha256
+bash scripts/build_linux.sh    # PyInstaller → dist/justconvertit/ → .deb
+bash scripts/verify_offline.sh
 ```
 
-Smoke offline: `bash scripts/verify_offline.sh`
-
-## End-user install
+Or, if the folder already exists:
 
 ```bash
-tar -xzf justconvertit-0.1.0-linux-x86_64.tar.gz
-cd justconvertit
-./install.sh
+bash scripts/build_deb.sh
 ```
 
-Default install path: `~/.local/opt/justconvertit`  
-App menu entry + `~/.local/bin/justconvertit` symlink.
+Package layout: `/opt/justconvertit`, desktop entry, icon, `/usr/bin/justconvertit`.
 
-System-wide: `sudo ./install.sh --system` → `/opt/justconvertit`
+## Maintainer helpers (not for end users)
 
-## Optional wrappers
+`install.sh` / `uninstall.sh` remain for local smoke tests without `dpkg`. Do not publish them as the product install path.
 
-After the PyInstaller tree is verified:
-
-- **AppImage** — wrap the folder with appimagetool
-- **.deb** — package the same tree under `/opt/justconvertit`
-
-Do not claim broad distro compatibility without testing each target. Do not add an in-app updater.
+Do not claim broad distro compatibility without testing. Do not add an in-app updater.

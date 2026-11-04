@@ -4,40 +4,40 @@ justconvertit is a **standalone** desktop app. End users do **not** need Python,
 
 After install, core conversions work **offline**. See [PRIVACY.md](PRIVACY.md) and [PLATFORMS.md](PLATFORMS.md).
 
-## Ubuntu — install like a normal app
+## Ubuntu — `.deb` package
 
-1. Download `justconvertit-<version>-linux-x86_64.tar.gz` from the release page.
+1. Download `justconvertit_<version>_amd64.deb` from the release page.
 2. Verify the SHA-256 checksum published with the release.
-3. Extract and install:
+3. Install either way:
+   - Double-click the `.deb` and open it in Ubuntu Software / App Center, or
+   - Terminal:
 
 ```bash
-tar -xzf justconvertit-0.1.0-linux-x86_64.tar.gz
-cd justconvertit
-./install.sh
+sudo apt install ./justconvertit_0.1.0_amd64.deb
 ```
 
-That copies the app to `~/.local/opt/justconvertit`, adds an app-menu entry, and links `~/.local/bin/justconvertit`.
+If apt prints a notice like:
 
-4. Open **justconvertit** from your application menu (or run `justconvertit` in a terminal).
+```text
+N: Download is performed unsandboxed as root as file '…/justconvertit_….deb'
+couldn't be accessed by user '_apt'. - pkgAcquire::Run (13: Permission denied)
+```
 
-System-wide (optional):
+that is **normal for a local `.deb` in `~/Downloads`**. The `N:` line is a notice, not a failure. Your friend’s log already shows `Setting up justconvertit (0.1.0)…` and desktop-menu triggers — the app is installed. To avoid the notice next time, copy the file somewhere world-readable first:
 
 ```bash
-sudo ./install.sh --system
+cp ~/Downloads/justconvertit_0.1.0_amd64.deb /tmp/
+sudo apt install /tmp/justconvertit_0.1.0_amd64.deb
 ```
 
-If the app fails to start with a Qt/xcb error:
-
-```bash
-sudo apt-get install -y libxcb-cursor0 libegl1 libxkbcommon0
-```
+4. Open **justconvertit** from your application menu.
 
 ### Uninstall (Ubuntu)
 
+- **Settings → Apps → justconvertit → Uninstall**, or
+
 ```bash
-~/.local/opt/justconvertit/uninstall.sh
-# system install:
-# sudo /opt/justconvertit/uninstall.sh
+sudo apt remove justconvertit
 ```
 
 ## Windows — Setup.exe
@@ -53,7 +53,7 @@ Primary product target. Build notes: [WINDOWS.md](WINDOWS.md).
 
 ### Uninstall
 
-- **Settings → Apps → justconvertit → Uninstall**, or  
+- **Settings → Apps → justconvertit → Uninstall**, or
 - Start Menu → justconvertit → Uninstall
 
 The uninstaller removes application files. It does not remove LibreOffice / FFmpeg installed separately.
@@ -101,8 +101,8 @@ bash scripts/verify_offline.sh
 
 | Symptom | Fix |
 |---------|-----|
-| `qt.qpa.plugin: Could not load … "xcb"` | Install `libxcb-cursor0` (and related Qt deps) |
+| `qt.qpa.plugin: Could not load … "xcb"` | `sudo apt-get install -y libxcb-cursor0` (usually pulled in by the `.deb`) |
 | LibreOffice pads missing | First-run Install, or Settings → Install / `apt`/`winget`; restart |
 | FFmpeg pads missing | Same as LibreOffice; or put `ffmpeg` on PATH |
 | Conversion refused large file | Soft limit ~500 MiB |
-| “Need Python?” | No — use the release archive / Setup.exe, not the source tree |
+| “Need Python?” | No — use the `.deb` / Setup.exe, not the source tree |

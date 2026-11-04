@@ -30,6 +30,7 @@ a = Analysis(
         "omniconvert.converters.office_pure",
         "omniconvert.converters.office_libreoffice",
         "omniconvert.converters.media_ffmpeg",
+        "omniconvert.converters.svg_inkscape",
     ],
     hookspath=[],
     hooksconfig={},

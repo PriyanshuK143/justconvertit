@@ -16,11 +16,15 @@ from omniconvert.core.converter import (
     SettingSpec,
     check_cancelled,
 )
+from omniconvert.core.crop import crop_box_pixels, crop_setting_specs, parse_crop_percents
 from omniconvert.core.errors import ConversionFailedError, ResourceLimitError, ValidationError
 from omniconvert.core.formats import IMAGE_FORMATS, FormatId
 from omniconvert.core.job import ConversionResult
 from omniconvert.core.limits import MAX_IMAGE_PIXELS
 from omniconvert.core.output import AtomicWriter, verify_output
+
+_CROP_ID = "image.crop"
+_RESIZE_ID = "image.resize"
 
 # Pillow can be DoS'd by decompression bombs — enforce a limit.
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
@@ -208,6 +212,44 @@ class ImagePillowConverter(Converter):
                 tested=True,
             )
         )
+        ops.append(
+            ConversionOperation(
+                operation_id=_CROP_ID,
+                label="Crop image → PNG",
+                source_formats=IMAGE_FORMATS,
+                target_format=FormatId.PNG,
+                description=(
+                    "Crop margins as a percent of width/height (max 40% per side)."
+                ),
+                settings=crop_setting_specs(),
+                wheel_label="Crop",
+                supports_batch=True,
+                tested=True,
+            )
+        )
+        ops.append(
+            ConversionOperation(
+                operation_id=_RESIZE_ID,
+                label="Resize image → PNG",
+                source_formats=IMAGE_FORMATS,
+                target_format=FormatId.PNG,
+                description="Shrink image so the longest edge is at most max_edge (aspect preserved).",
+                settings=(
+                    SettingSpec(
+                        key="max_edge",
+                        label="Max edge (px)",
+                        kind="int",
+                        default=1280,
+                        minimum=16,
+                        maximum=10000,
+                        help_text="Longest side after resize (px). Larger images shrink; smaller stay unchanged.",
+                    ),
+                ),
+                wheel_label="Resize",
+                supports_batch=True,
+                tested=True,
+            )
+        )
         return ops
 
     def convert(
@@ -244,6 +286,52 @@ class ImagePillowConverter(Converter):
                         output_path=destination,
                         bytes_written=size,
                         message="Saved transparent PNG (background removed).",
+                    )
+
+                if operation_id == _CROP_ID:
+                    if progress:
+                        progress(0.35, "Cropping…")
+                    percents = parse_crop_percents(settings)
+                    box = crop_box_pixels(img.width, img.height, percents)
+                    cropped = ImageOps.exif_transpose(img).crop(box)
+                    check_cancelled(is_cancelled)
+                    with AtomicWriter(destination) as tmp:
+                        cropped.save(tmp, format="PNG", optimize=True)
+                    size = verify_output(destination)
+                    if progress:
+                        progress(1.0, "Done")
+                    return ConversionResult(
+                        output_path=destination,
+                        bytes_written=size,
+                        message=f"Cropped to {cropped.width}×{cropped.height} PNG.",
+                    )
+
+                if operation_id == _RESIZE_ID:
+                    if progress:
+                        progress(0.35, "Resizing…")
+                    try:
+                        max_edge = int(settings.get("max_edge", 1280))
+                    except (TypeError, ValueError) as exc:
+                        raise ValidationError("max_edge must be a whole number.") from exc
+                    if max_edge < 16 or max_edge > 10000:
+                        raise ValidationError("max_edge must be between 16 and 10000.")
+                    oriented = ImageOps.exif_transpose(img)
+                    w, h = oriented.size
+                    longest = max(w, h)
+                    if longest > max_edge:
+                        scale = max_edge / float(longest)
+                        new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+                        oriented = oriented.resize(new_size, Image.Resampling.LANCZOS)
+                    check_cancelled(is_cancelled)
+                    with AtomicWriter(destination) as tmp:
+                        oriented.save(tmp, format="PNG", optimize=True)
+                    size = verify_output(destination)
+                    if progress:
+                        progress(1.0, "Done")
+                    return ConversionResult(
+                        output_path=destination,
+                        bytes_written=size,
+                        message=f"Resized to {oriented.width}×{oriented.height} PNG.",
                     )
 
                 target_token = operation_id.rsplit("_to_", 1)[-1]

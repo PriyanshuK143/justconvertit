@@ -42,16 +42,19 @@ justconvertit never downloads these tools.
 
 ```powershell
 .\scripts\build_windows.ps1
-# Install Inno Setup 6, then compile:
-#   packaging\windows\installer.iss
 ```
 
-Outputs:
+That script builds the app, runs a headless smoke convert, installs Inno Setup via winget if needed, and writes:
 
 - `dist\justconvertit\justconvertit.exe` — runnable folder build
-- `packaging\windows\Output\justconvertit-0.1.0-Setup.exe` — installer with Start Menu + uninstaller
+- `dist\JustConvertIt-0.1.0-Setup.exe` — friend-share installer (per-user, no admin)
+- `dist\JustConvertIt-0.1.0-Setup.sha256` — checksum
 
-Publish SHA-256 checksums with the release (see `docs/RELEASE.md`).
+**Share the Setup.exe** with Windows friends. They double-click → Next → Finish. No Python required.
+
+CI (`build-windows` job) also produces the same Setup.exe artifact on `windows-latest`.
+
+**This Linux host cannot produce a Windows `.exe`.** Use a Windows PC or GitHub Actions.
 
 ### Clean-machine test checklist
 

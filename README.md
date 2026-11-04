@@ -23,19 +23,11 @@ Conversion list: [docs/CONVERSION_MATRIX.md](docs/CONVERSION_MATRIX.md). Status:
 
 Download from the **stable release page**, verify checksums, then:
 
-**Ubuntu**
-
-```bash
-tar -xzf justconvertit-0.1.0-linux-x86_64.tar.gz
-cd justconvertit
-./install.sh
-```
-
-Open **justconvertit** from your app menu. Details: [docs/INSTALL.md](docs/INSTALL.md).
+**Ubuntu** — install the `.deb` (double-click / App Center, or `sudo apt install ./justconvertit_0.1.0_amd64.deb`), then open **justconvertit** from the app menu.
 
 **Windows** — run `justconvertit-<version>-Setup.exe`, then launch from the Start menu.
 
-After installation, core conversions work without internet.
+Details: [docs/INSTALL.md](docs/INSTALL.md). After installation, core conversions work without internet.
 
 ## Development setup (Ubuntu)
 
@@ -81,7 +73,7 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD=1; $env:QT_QPA_PLATFORM="offscreen"; pytest 
 Release builds **must** use `requirements-release.txt`. Process: [docs/RELEASE.md](docs/RELEASE.md).
 
 ```bash
-bash scripts/build_linux.sh
+bash scripts/build_linux.sh          # PyInstaller folder + .deb
 bash scripts/verify_offline.sh
 ```
 

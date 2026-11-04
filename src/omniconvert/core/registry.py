@@ -11,7 +11,12 @@ from omniconvert.core.converter import (
     Converter,
     ProgressCallback,
 )
-from omniconvert.core.errors import DependencyMissingError, UnsupportedConversionError
+from omniconvert.core.errors import (
+    AppError,
+    ConversionFailedError,
+    DependencyMissingError,
+    UnsupportedConversionError,
+)
 from omniconvert.core.formats import FormatId
 from omniconvert.core.job import ConversionResult
 
@@ -121,14 +126,21 @@ class ConversionRegistry:
                 or "Required dependency is not available."
             )
 
-        return converter.convert(
-            operation_id=op.operation_id,
-            source=source,
-            destination=destination,
-            settings=settings or {},
-            progress=progress,
-            is_cancelled=is_cancelled,
-        )
+        try:
+            return converter.convert(
+                operation_id=op.operation_id,
+                source=source,
+                destination=destination,
+                settings=settings or {},
+                progress=progress,
+                is_cancelled=is_cancelled,
+            )
+        except AppError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — map parser crashes to soft failures
+            raise ConversionFailedError(
+                "Couldn't convert that file. Try another format or a different file."
+            ) from exc
 
 
 _REGISTRY: ConversionRegistry | None = None

@@ -28,6 +28,38 @@ def _ensure_text_size(path: Path) -> None:
         )
 
 
+def _csv_to_xlsx_fast(source: Path, destination: Path) -> None:
+    """Flat CSV → XLSX via openpyxl (avoids pandas import cost on this hot path)."""
+    from openpyxl import Workbook
+
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("Sheet1")
+    with source.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        any_row = False
+        for row in reader:
+            ws.append(list(row))
+            any_row = True
+        if not any_row:
+            ws.append([])
+    wb.save(destination)
+
+
+def _xlsx_to_csv_fast(source: Path, destination: Path) -> None:
+    """First sheet XLSX → CSV via openpyxl read_only."""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(source, read_only=True, data_only=True)
+    try:
+        ws = wb.worksheets[0]
+        with destination.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            for row in ws.iter_rows(values_only=True):
+                writer.writerow(["" if c is None else c for c in row])
+    finally:
+        wb.close()
+
+
 def _is_flat_value(value: Any) -> bool:
     return value is None or isinstance(value, (str, int, float, bool))
 
@@ -172,15 +204,13 @@ class TabularConverter(Converter):
                     df.to_csv(tmp, index=False)
             elif operation_id == "data.csv_to_xlsx":
                 _ensure_text_size(source)
-                df = pd.read_csv(source)
                 check_cancelled(is_cancelled)
                 with AtomicWriter(destination) as tmp:
-                    df.to_excel(tmp, index=False)
+                    _csv_to_xlsx_fast(source, Path(tmp))
             elif operation_id == "data.xlsx_to_csv":
-                df = pd.read_excel(source, sheet_name=0)
                 check_cancelled(is_cancelled)
                 with AtomicWriter(destination) as tmp:
-                    df.to_csv(tmp, index=False)
+                    _xlsx_to_csv_fast(source, Path(tmp))
             elif operation_id == "data.json_to_xlsx":
                 _ensure_text_size(source)
                 data = json.loads(source.read_text(encoding="utf-8-sig"))

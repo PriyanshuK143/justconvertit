@@ -6,9 +6,9 @@ justconvertit does **not** promise indefinite compatibility with every future OS
 
 | Platform | Build form | Status | Notes |
 |----------|------------|--------|-------|
-| Ubuntu 22.04 / 24.04 (x86_64) | PyInstaller one-folder (`justconvertit`) | Primary Linux target | Needs basic X11/Wayland Qt deps (e.g. `libxcb-cursor0`) |
+| Ubuntu 22.04 / 24.04 (x86_64) | `.deb` (`justconvertit_*_amd64.deb`) | Primary Linux target | Qt/X11 deps declared in the package; optional LO/FFmpeg via apt |
 | Windows 10 / 11 (x64) | PyInstaller + Inno Setup | **Primary** product target | See `docs/WINDOWS.md`. Build/test on Windows or `windows-latest` CI — not claimed verified from Linux hosts |
-| Other Linux distros | Same folder tree | Best-effort | Test before claiming support |
+| Other Linux distros | Best-effort | Not a 0.1 claim | Prefer rebuilding the `.deb` / testing before claiming support |
 | macOS | — | Not a 0.1 target | |
 
 ## Runtime requirements (end user)

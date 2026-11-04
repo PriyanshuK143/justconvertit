@@ -23,7 +23,9 @@ These use free libraries that ship with the app. No LibreOffice or FFmpeg requir
 
 | From | To |
 |------|-----|
-| TXT | PDF, DOCX |
+| TXT | PDF, DOCX, MD |
+| MD | TXT |
+| HTML | TXT |
 | JSON | CSV, XLSX, PDF, Pretty JSON |
 | CSV | JSON, XLSX |
 | XLSX | CSV, JSON |
@@ -40,7 +42,10 @@ columnar object of flat arrays, or a single flat object. Nested objects/arrays a
 | PDF | PNG | Render page 1 |
 | PDF | JPEG | Render page 1 |
 | PDF | Pages ZIP | Every page as PNG inside a ZIP (capped page/pixel budget) |
+| PDF | PDF (Rotate) | 90 / 180 / 270° all pages |
+| PDF | PDF (Compress) | Best-effort content-stream rewrite |
 | Image | PDF | Single-page PDF |
+| Image | Crop → PNG | Margins as % (max 40% per side) |
 
 ### Office — pure Python (always available)
 
@@ -70,6 +75,12 @@ TXT→PDF on the wheel so users get the best layout by default.
 | WAV | MP3 | FFmpeg | |
 | MP3 | WAV | FFmpeg | |
 | MP4 / MKV | MP3 | FFmpeg | Audio extract |
+| GIF | MP4 | FFmpeg | H.264 encode |
+| MP4 / MKV | GIF | FFmpeg | Short clip (max 10s); fps/duration checked |
+| MP4 / MKV / GIF | Frames ZIP | FFmpeg | PNG sequence in ZIP (max 300 frames); fps checked |
+| Frames ZIP | MP4 | FFmpeg | ZIP must contain only images |
+| MP4 / MKV | Crop → MP4 | FFmpeg | Margins as % (max 40% per side) |
+| SVG | PNG / PDF | Inkscape | Optional; `sudo apt install inkscape` |
 
 ## Redistribution notes (future public release)
 
@@ -87,3 +98,5 @@ TXT→PDF on the wheel so users get the best layout by default.
 - Password-protected PDF unlock
 - Pixel-perfect DOCX/PPTX layout without LibreOffice
 - Video re-encode without FFmpeg
+- AI image upscaling
+- High-fidelity PDF ↔ HTML

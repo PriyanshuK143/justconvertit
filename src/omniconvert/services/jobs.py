@@ -104,18 +104,21 @@ class ConversionWorker(QObject):
             discard_incomplete_output(destination)
             log.exception("Unexpected conversion error")
             job.status = JobStatus.FAILED
-            job.error_message = "An unexpected error occurred during conversion."
+            job.error_message = (
+                "Couldn't convert that file. Try another format or a different file."
+            )
             self.finished_err.emit(job.job_id, job.error_message)
 
 
 class JobManager(QObject):
-    """Runs at most one conversion job at a time (v1)."""
+    """Runs conversion jobs one at a time, with an optional FIFO batch queue."""
 
     job_progress = Signal(str, object, str)
     job_succeeded = Signal(str, str, str)
     job_failed = Signal(str, str)
     job_cancelled = Signal(str)
     busy_changed = Signal(bool)
+    batch_progress = Signal(int, int, str)  # done, total, message
 
     def __init__(self, registry: ConversionRegistry, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -123,10 +126,14 @@ class JobManager(QObject):
         self._thread: QThread | None = None
         self._worker: ConversionWorker | None = None
         self._active_id: str | None = None
+        self._queue: list[dict[str, Any]] = []
+        self._batch_total = 0
+        self._batch_done = 0
+        self._batch_cancel = False
 
     @property
     def is_busy(self) -> bool:
-        return self._thread is not None and self._thread.isRunning()
+        return (self._thread is not None and self._thread.isRunning()) or bool(self._queue)
 
     def start(
         self,
@@ -139,19 +146,44 @@ class JobManager(QObject):
         settings: dict[str, Any] | None = None,
         operation_id: str | None = None,
     ) -> ConversionJob:
+        spec = {
+            "source_path": Path(source_path),
+            "source_format": source_format,
+            "target_format": target_format,
+            "output_dir": Path(output_dir),
+            "output_name": output_name,
+            "settings": settings or {},
+            "operation_id": operation_id,
+        }
+        if self._thread is not None and self._thread.isRunning():
+            raise RuntimeError("A conversion is already running.")
+        return self._launch(spec)
+
+    def start_batch(self, specs: list[dict[str, Any]]) -> None:
+        """Queue multiple jobs; runs sequentially. Each spec matches start() kwargs."""
+        if not specs:
+            return
         if self.is_busy:
             raise RuntimeError("A conversion is already running.")
+        self._batch_cancel = False
+        self._queue = [dict(s) for s in specs]
+        self._batch_total = len(self._queue)
+        self._batch_done = 0
+        self.batch_progress.emit(0, self._batch_total, "Batch starting…")
+        first = self._queue.pop(0)
+        self._launch(first)
 
+    def _launch(self, spec: dict[str, Any]) -> ConversionJob:
         job = ConversionJob(
-            source_path=Path(source_path),
-            target_format=target_format,
-            output_dir=Path(output_dir),
-            output_name=output_name,
-            settings=settings or {},
-            operation_id=operation_id,
+            source_path=Path(spec["source_path"]),
+            target_format=str(spec["target_format"]),
+            output_dir=Path(spec["output_dir"]),
+            output_name=spec.get("output_name"),
+            settings=spec.get("settings") or {},
+            operation_id=spec.get("operation_id"),
         )
         thread = QThread(self)
-        worker = ConversionWorker(self.registry, job, source_format)
+        worker = ConversionWorker(self.registry, job, spec["source_format"])
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
@@ -163,7 +195,7 @@ class JobManager(QObject):
         worker.finished_err.connect(thread.quit)
         worker.finished_cancel.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(self._clear_busy)
+        thread.finished.connect(self._on_thread_finished)
 
         self._thread = thread
         self._worker = worker
@@ -173,6 +205,8 @@ class JobManager(QObject):
         return job
 
     def cancel(self) -> None:
+        self._batch_cancel = True
+        self._queue.clear()
         if self._worker:
             self._worker.request_cancel()
 
@@ -200,18 +234,49 @@ class JobManager(QObject):
         self._thread = None
         self._worker = None
         self._active_id = None
+        self._queue.clear()
+        self._batch_total = 0
+        self._batch_done = 0
+        self._batch_cancel = False
 
     def _on_ok(self, job_id: str, path: str, message: str) -> None:
+        if self._batch_total:
+            self._batch_done += 1
+            self.batch_progress.emit(
+                self._batch_done,
+                self._batch_total,
+                f"Completed {self._batch_done}/{self._batch_total}",
+            )
         self.job_succeeded.emit(job_id, path, message)
 
     def _on_err(self, job_id: str, message: str) -> None:
+        if self._batch_total:
+            self._batch_done += 1
+            self.batch_progress.emit(
+                self._batch_done,
+                self._batch_total,
+                f"Failed {self._batch_done}/{self._batch_total}: {message}",
+            )
         self.job_failed.emit(job_id, message)
 
     def _on_cancel(self, job_id: str) -> None:
+        self._queue.clear()
+        self._batch_total = 0
         self.job_cancelled.emit(job_id)
 
-    def _clear_busy(self) -> None:
+    def _on_thread_finished(self) -> None:
         self._thread = None
         self._worker = None
         self._active_id = None
-        self.busy_changed.emit(False)
+        if self._batch_cancel or not self._queue:
+            was_batch = self._batch_total > 0
+            done = self._batch_done
+            total = self._batch_total
+            self._batch_total = 0
+            self._batch_done = 0
+            self.busy_changed.emit(False)
+            if was_batch and not self._batch_cancel:
+                self.batch_progress.emit(done, total, f"Batch finished ({done}/{total})")
+            return
+        next_spec = self._queue.pop(0)
+        self._launch(next_spec)

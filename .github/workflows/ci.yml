@@ -77,28 +77,36 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: |
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+      - name: Build app + Setup.exe
+        shell: pwsh
+        run: |
           python -m pip install -U pip
           pip install -r requirements-release.txt
           pip install -e .
+          pip install pyinstaller
           pyinstaller --noconfirm --clean packaging/windows/omniconvert.spec
-      - name: Smoke convert (offline-capable)
-        shell: pwsh
-        run: |
           $in = Join-Path $env:TEMP "oc-in.png"
           $out = Join-Path $env:TEMP "oc-out.jpg"
           python -c "from PIL import Image; Image.new('RGB',(8,8),(1,2,3)).save(r'$in')"
           .\dist\justconvertit\justconvertit.exe --smoke-convert image.png_to_jpeg $in $out
           if (-not (Test-Path $out)) { throw "smoke output missing" }
-      - name: Checksum
-        shell: pwsh
-        run: |
-          Get-ChildItem -Recurse dist\justconvertit | Get-FileHash -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash) $($_.Path)" } |
-            Out-File -Encoding utf8 justconvertit-windows.sha256
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "${env:ProgramFiles}\Inno Setup 6\ISCC.exe" }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found after choco install" }
+          & $iscc packaging\windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compile failed" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -Force packaging\windows\Output\JustConvertIt-0.1.0-Setup.exe dist\JustConvertIt-0.1.0-Setup.exe
+          Get-FileHash dist\JustConvertIt-0.1.0-Setup.exe -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  JustConvertIt-0.1.0-Setup.exe" } |
+            Set-Content -Encoding ascii dist\JustConvertIt-0.1.0-Setup.sha256
       - uses: actions/upload-artifact@v4
         with:
-          name: justconvertit-windows
+          name: justconvertit-windows-setup
           path: |
+            dist/JustConvertIt-0.1.0-Setup.exe
+            dist/JustConvertIt-0.1.0-Setup.sha256
             dist/justconvertit
-            justconvertit-windows.sha256

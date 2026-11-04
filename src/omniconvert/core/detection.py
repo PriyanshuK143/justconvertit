@@ -7,8 +7,8 @@ import struct
 from pathlib import Path
 
 from omniconvert.core.errors import DetectionError, ResourceLimitError, ValidationError
-from omniconvert.core.formats import DetectedFile, FormatId
-from omniconvert.core.limits import MAX_INPUT_BYTES
+from omniconvert.core.formats import FRAME_IMAGE_EXTENSIONS, DetectedFile, FormatId
+from omniconvert.core.limits import MAX_INPUT_BYTES, MAX_VIDEO_FRAMES
 
 
 def _read_header(path: Path, n: int = 64) -> bytes:
@@ -40,6 +40,25 @@ def _is_pdf(header: bytes) -> bool:
     return header.startswith(b"%PDF")
 
 
+def _is_gif(header: bytes) -> bool:
+    return header.startswith(b"GIF87a") or header.startswith(b"GIF89a")
+
+
+def _looks_like_svg(sample: bytes) -> bool:
+    text = sample.decode("utf-8", errors="replace").lstrip("\ufeff").lstrip().lower()
+    if text.startswith("<?xml"):
+        return "<svg" in text[:2000]
+    return text.startswith("<svg")
+
+
+def _looks_like_html(sample: bytes) -> bool:
+    text = sample.decode("utf-8", errors="replace").lstrip("\ufeff").lstrip().lower()
+    if text.startswith("<!doctype html") or text.startswith("<html"):
+        return True
+    # Extension-backed loose match for common snippets
+    return False
+
+
 def _is_zip_based(header: bytes) -> bool:
     return header.startswith(b"PK\x03\x04") or header.startswith(b"PK\x05\x06")
 
@@ -68,6 +87,35 @@ def _sniff_zip_office(path: Path) -> FormatId | None:
     return None
 
 
+def _sniff_image_frames_zip(path: Path) -> FormatId | None:
+    """ZIP of image frames (e.g. video → frames output) → FormatId.ZIP."""
+    from omniconvert.core.safe_zip import open_zip_safely
+
+    try:
+        with open_zip_safely(path) as zf:
+            names = [
+                n.replace("\\", "/")
+                for n in zf.namelist()
+                if n and not n.endswith("/")
+            ]
+    except (ResourceLimitError, ValidationError) as exc:
+        if isinstance(exc, ResourceLimitError):
+            raise
+        raise DetectionError(exc.user_message, detail=exc.detail) from exc
+
+    if not names:
+        return None
+    if len(names) > MAX_VIDEO_FRAMES:
+        raise DetectionError(
+            f"Frame ZIP has too many images (max {MAX_VIDEO_FRAMES}).",
+        )
+    for name in names:
+        suffix = Path(name).suffix.lower()
+        if suffix not in FRAME_IMAGE_EXTENSIONS:
+            return None
+    return FormatId.ZIP
+
+
 def _looks_like_text(sample: bytes) -> bool:
     if not sample:
         return True
@@ -93,6 +141,10 @@ def _detect_textish(path: Path, sample: bytes) -> FormatId:
             return FormatId.JSON
         if ext == ".csv":
             return FormatId.CSV
+        if ext == ".md":
+            return FormatId.MD
+        if ext in {".html", ".htm"}:
+            return FormatId.HTML
         return FormatId.TXT
 
     if text[0] in "{[":
@@ -118,6 +170,11 @@ def _detect_textish(path: Path, sample: bytes) -> FormatId:
         raise DetectionError("File has a .json extension but is not valid JSON.")
     if path.suffix.lower() == ".csv":
         return FormatId.CSV
+    if path.suffix.lower() == ".md":
+        return FormatId.MD
+    if path.suffix.lower() in {".html", ".htm"}:
+        # Prefer HTML when extension says so even for tag soup.
+        return FormatId.HTML
     return FormatId.TXT
 
 
@@ -129,7 +186,13 @@ _EXT_HINT: dict[str, FormatId] = {
     ".bmp": FormatId.BMP,
     ".tif": FormatId.TIFF,
     ".tiff": FormatId.TIFF,
+    ".gif": FormatId.GIF,
+    ".svg": FormatId.SVG,
     ".txt": FormatId.TXT,
+    ".md": FormatId.MD,
+    ".markdown": FormatId.MD,
+    ".html": FormatId.HTML,
+    ".htm": FormatId.HTML,
     ".json": FormatId.JSON,
     ".csv": FormatId.CSV,
     ".pdf": FormatId.PDF,
@@ -140,6 +203,7 @@ _EXT_HINT: dict[str, FormatId] = {
     ".wav": FormatId.WAV,
     ".mp4": FormatId.MP4,
     ".mkv": FormatId.MKV,
+    ".zip": FormatId.ZIP,
 }
 
 _MIME = {
@@ -148,7 +212,11 @@ _MIME = {
     FormatId.WEBP: "image/webp",
     FormatId.BMP: "image/bmp",
     FormatId.TIFF: "image/tiff",
+    FormatId.GIF: "image/gif",
+    FormatId.SVG: "image/svg+xml",
     FormatId.TXT: "text/plain",
+    FormatId.MD: "text/markdown",
+    FormatId.HTML: "text/html",
     FormatId.JSON: "application/json",
     FormatId.CSV: "text/csv",
     FormatId.PDF: "application/pdf",
@@ -159,6 +227,7 @@ _MIME = {
     FormatId.WAV: "audio/wav",
     FormatId.MP4: "video/mp4",
     FormatId.MKV: "video/x-matroska",
+    FormatId.ZIP: "application/zip",
     FormatId.UNKNOWN: "application/octet-stream",
 }
 
@@ -189,6 +258,8 @@ def detect_file(path: Path | str) -> DetectedFile:
         fmt = FormatId.PNG
     elif _is_jpeg(header):
         fmt = FormatId.JPEG
+    elif _is_gif(header):
+        fmt = FormatId.GIF
     elif _is_webp(header):
         fmt = FormatId.WEBP
     elif _is_bmp(header):
@@ -200,7 +271,12 @@ def detect_file(path: Path | str) -> DetectedFile:
     elif _is_zip_based(header):
         fmt = _sniff_zip_office(p)
         if fmt is None:
-            raise DetectionError("ZIP archive detected, but it is not a supported Office format.")
+            fmt = _sniff_image_frames_zip(p)
+        if fmt is None:
+            raise DetectionError(
+                "ZIP archive detected, but it is not a supported Office "
+                "or image-frames archive."
+            )
     elif header.startswith(b"ID3") or (len(header) >= 2 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0):
         # Rough MP3 sniff — only claim if extension agrees; otherwise unknown.
         if p.suffix.lower() == ".mp3":
@@ -213,8 +289,16 @@ def detect_file(path: Path | str) -> DetectedFile:
     elif header.startswith(b"\x1aE\xdf\xa3") and p.suffix.lower() == ".mkv":
         fmt = FormatId.MKV
 
-    if fmt is None and _looks_like_text(header):
-        fmt = _detect_textish(p, header if size <= 512 else _read_header(p, min(size, 8192)))
+    sample = header if size <= 512 else _read_header(p, min(size, 8192))
+    if fmt is None and _looks_like_svg(sample):
+        fmt = FormatId.SVG
+    elif fmt is None and (
+        _looks_like_html(sample)
+        or (p.suffix.lower() in {".html", ".htm"} and _looks_like_text(sample))
+    ):
+        fmt = FormatId.HTML
+    elif fmt is None and _looks_like_text(header):
+        fmt = _detect_textish(p, sample)
 
     if fmt is None:
         hint = _EXT_HINT.get(p.suffix.lower())

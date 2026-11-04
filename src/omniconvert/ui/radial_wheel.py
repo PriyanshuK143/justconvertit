@@ -10,6 +10,7 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
+    QLinearGradient,
     QMouseEvent,
     QPainter,
     QPainterPath,
@@ -19,14 +20,22 @@ from PySide6.QtWidgets import QWidget
 
 from omniconvert.core.converter import ConversionOperation
 from omniconvert.product import APP_NAME
+from omniconvert.ui.icons import paint_convert_mark, paint_file_mark, paint_format_icon
 
 _MAX_PADS = 8
 # Fraction of each slice used by the pad (rest is a slim gap between sides).
-_PAD_FILL = 0.92
+_PAD_FILL = 0.86
+# Cap so a single option never becomes a near-full C-ring.
+_MAX_PAD_SPAN_DEG = 56.0
+_SINGLE_PAD_SPAN_DEG = 58.0
+_CLUSTER_GAP_DEG = 12.0
 # How far a hovered pad grows outward when it "pops".
-_POP_SCALE = 0.10
-# Radial air gap between hub rim and pad inner edge, as a fraction of outer radius.
-_HUB_PAD_GAP = 0.045
+_POP_SCALE = 0.12
+# Shared layout for chip + full-ring modes (same hub / gap proportions).
+_HUB_FRAC = 0.42
+_HUB_PAD_GAP = 0.09
+# Few-option mode uses chunky action chips instead of thin wedges.
+_CHIP_MODE_MAX = 3
 
 
 @dataclass
@@ -50,6 +59,7 @@ class RadialWheel(QWidget):
 
     formatSelected = Signal(str)
     fileDropped = Signal(str)
+    filesDropped = Signal(list)  # list[str] local paths when multiple files dropped
     openRequested = Signal()
     # Global mouse position while the user drags the orb across the desktop.
     windowDragMoved = Signal(QPoint)
@@ -84,6 +94,8 @@ class RadialWheel(QWidget):
         self._banner_color = QColor("#334155")
         # Per-pad pop amount 0..1, animated toward hover target.
         self._pop: list[float] = []
+        # Idle breathe 0..2π — keeps pads feeling alive when waiting for a drag.
+        self._pulse_phase = 0.0
         self._pop_timer = QTimer(self)
         self._pop_timer.setInterval(16)
         self._pop_timer.timeout.connect(self._tick_pop)
@@ -134,6 +146,8 @@ class RadialWheel(QWidget):
 
     def set_has_file(self, has_file: bool) -> None:
         self._has_file = has_file
+        if has_file and self._segments and not self._pop_timer.isActive():
+            self._pop_timer.start()
         self.update()
 
     def set_wheel_enabled(self, enabled: bool) -> None:
@@ -145,31 +159,57 @@ class RadialWheel(QWidget):
             return self._segments[self._selected_index].operation.operation_id
         return None
 
-    def _rebuild_segments(self) -> None:
-        """Even pads, first mid-angle at TOP (90°), then clockwise.
+    def _chip_mode(self) -> bool:
+        """Few options → rounded action chips (more interactive than thin wedges)."""
+        n = len(self._segments) if self._segments else len(self._operations)
+        return bool(self._has_file and 0 < n <= _CHIP_MODE_MAX)
 
-        Each pad uses only part of its slice so neighboring sides stay detached.
+    def _rebuild_segments(self) -> None:
+        """Place pads around the hub.
+
+        1–4 options: compact chips clustered near the top (avoids a huge empty
+        ring with one C-shaped remnant). 5–8: even full-circle layout with a
+        capped span so pads stay detached.
         """
         self._segments.clear()
         n = len(self._operations)
         if n == 0:
             return
+
+        if n == 1:
+            span = _SINGLE_PAD_SPAN_DEG
+            mid = 90.0
+            start = (mid - span / 2.0) % 360.0
+            self._segments.append(_Segment(self._operations[0], start, span, mid))
+            return
+
+        if n <= 4:
+            span = min(_MAX_PAD_SPAN_DEG, 46.0 + (4 - n) * 3.0)
+            step = span + _CLUSTER_GAP_DEG
+            total = n * span + (n - 1) * _CLUSTER_GAP_DEG
+            # Cluster centered on top (90°), spreading left/right.
+            first_mid = 90.0 + total / 2.0 - span / 2.0
+            for i, op in enumerate(self._operations):
+                mid = (first_mid - i * step) % 360.0
+                start = (mid - span / 2.0) % 360.0
+                self._segments.append(_Segment(op, start, span, mid))
+            return
+
         slot = 360.0 / n
-        span = slot * _PAD_FILL
+        span = min(slot * _PAD_FILL, _MAX_PAD_SPAN_DEG)
         for i, op in enumerate(self._operations):
             mid = (90.0 - i * slot) % 360.0  # clockwise from top
             start = (mid - span / 2.0) % 360.0
             self._segments.append(_Segment(op, start, span, mid))
 
     def _geometry(self) -> tuple[QPointF, float, float, float]:
-        """center, pad_outer, pad_inner, hub — gap between hub and pads is intentional."""
+        """center, pad_outer, pad_inner, hub — same proportions in chip + ring modes."""
         side = min(self.width(), self.height())
         # Leave room for pop-out growth past the nominal outer radius.
         outer = side / 2.0 - 14.0
         center = QPointF(self.width() / 2.0, self.height() / 2.0)
         if self._has_file and self._segments:
-            hub = outer * 0.40
-            # Modest gap so pads stay detached without a huge empty ring.
+            hub = outer * _HUB_FRAC
             pad_inner = hub + outer * _HUB_PAD_GAP
             pad_outer = outer
         else:
@@ -201,7 +241,15 @@ class RadialWheel(QWidget):
     def _index_for_pos(self, pos: QPointF) -> int:
         if self._is_on_hub(pos):
             return -2
-        if not self._segments or not self._is_on_ring(pos):
+        if not self._segments:
+            return -1
+        if self._chip_mode():
+            c, outer, inner, _ = self._geometry()
+            for i, seg in enumerate(self._segments):
+                if self._chip_rect(c, outer, inner, seg, i).contains(pos):
+                    return i
+            # Still allow classic ring hit as a forgiving fallback.
+        if not self._is_on_ring(pos):
             return -1
         ang = self._qt_angle(pos)
         for i, seg in enumerate(self._segments):
@@ -211,10 +259,14 @@ class RadialWheel(QWidget):
         return -1
 
     def _tick_pop(self) -> None:
-        if not self._pop:
+        if not self._pop and not (self._has_file and self._segments):
             self._pop_timer.stop()
             return
         changed = False
+        # Idle breathe so pads feel interactive even before hover.
+        if self._has_file and self._segments and not self._puck_dragging:
+            self._pulse_phase = (self._pulse_phase + 0.07) % (math.pi * 2.0)
+            changed = True
         for i in range(len(self._pop)):
             target = 1.0 if i == self._hover_index or i == self._selected_index else 0.0
             cur = self._pop[i]
@@ -226,93 +278,132 @@ class RadialWheel(QWidget):
                 changed = True
         if changed:
             self.update()
-        elif self._hover_index < 0 and self._selected_index < 0 and all(p == 0 for p in self._pop):
-            # Idle — keep timer cheap when nothing is popping.
-            pass
 
     def paintEvent(self, event) -> None:  # noqa: N802
         _ = event
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        c, outer, inner, hub = self._geometry()
+            c, outer, inner, hub = self._geometry()
 
-        if self._transparent_bg:
-            painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
-        else:
-            painter.fillRect(self.rect(), self._disc)
+            if self._transparent_bg:
+                painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
+            else:
+                painter.fillRect(self.rect(), self._disc)
 
-        show_pads = bool(self._has_file and self._segments)
-        if show_pads:
-            # Detached pads only — no continuous disc joining them to the hub.
-            for i, seg in enumerate(self._segments):
-                self._paint_pad(painter, c, outer, inner, seg, i)
+            show_pads = bool(self._has_file and self._segments)
+            if show_pads:
+                # Same floating chevrons + idle motion for few chips and full ring.
+                self._paint_drag_hints(painter, c, hub, inner, outer)
+                if self._chip_mode():
+                    for i, seg in enumerate(self._segments):
+                        self._paint_action_chip(painter, c, outer, inner, seg, i)
+                else:
+                    for i, seg in enumerate(self._segments):
+                        self._paint_pad(painter, c, outer, inner, seg, i)
 
-        hub_rect = QRectF(c.x() - hub, c.y() - hub, hub * 2, hub * 2)
+            hub_rect = QRectF(c.x() - hub, c.y() - hub, hub * 2, hub * 2)
+            self._paint_hub_chrome(painter, c, hub, hub_rect)
+
+            if not self._puck_dragging:
+                self._paint_hub_text(painter, hub_rect)
+
+            if self._banner:
+                self._paint_banner(painter, c, outer, inner)
+
+            if self._puck_dragging and self._puck_pos is not None:
+                painter.setPen(QPen(self._pad_hot, 2.5, Qt.PenStyle.DashLine))
+                painter.drawLine(c, self._puck_pos)
+                painter.setBrush(self._pad_hot)
+                painter.setPen(QPen(QColor("#ffffff"), 2))
+                painter.drawEllipse(self._puck_pos, 17, 17)
+        except Exception:  # noqa: BLE001 — never let paint crash the orb
+            import logging
+
+            logging.getLogger("omniconvert.ui").exception("wheel paint failed")
+        finally:
+            painter.end()
+
+    def _paint_hub_chrome(
+        self, painter: QPainter, c: QPointF, hub: float, hub_rect: QRectF
+    ) -> None:
+        """Crisp hub fill + blue rim — same look for few chips and full ring.
+
+        Soft blur/halo was only obvious in chip mode (empty air around the hub)
+        and looked inconsistent next to solid chip/pad borders.
+        """
+        breathe = 0.55 + 0.45 * (0.5 + 0.5 * math.sin(self._pulse_phase))
         painter.setBrush(self._hub_fill)
-        rim = self._hub_rim_active if (self._has_file or self._press_on_hub) else self._hub_rim
-        painter.setPen(QPen(rim, 2.5))
+        if self._has_file or self._press_on_hub:
+            # Match action-chip border: solid blue stroke that gently pulses.
+            rim_w = 2.6 + 0.9 * breathe
+            rim = QColor(self._hub_rim_active)
+            rim.setAlpha(int(200 + 55 * breathe))
+            painter.setPen(QPen(rim, rim_w))
+        else:
+            painter.setPen(QPen(self._hub_rim, 2.5))
         painter.drawEllipse(hub_rect)
-
-        if not self._puck_dragging:
-            self._paint_hub_text(painter, hub_rect)
-
-        if self._banner:
-            self._paint_banner(painter, c, outer, inner)
-
-        if self._puck_dragging and self._puck_pos is not None:
-            painter.setPen(QPen(self._pad_hot, 2, Qt.PenStyle.DashLine))
-            painter.drawLine(c, self._puck_pos)
-            painter.setBrush(self._pad_hot)
-            painter.setPen(QPen(QColor("#ffffff"), 2))
-            painter.drawEllipse(self._puck_pos, 16, 16)
-
-        painter.end()
+        if self._has_file:
+            dash = QPen(QColor("#93c5fd"), 1.5, Qt.PenStyle.DashLine)
+            dash.setDashPattern([3, 3])
+            painter.setPen(dash)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(c, hub * 0.78, hub * 0.78)
 
     def _paint_banner(
         self, painter: QPainter, c: QPointF, outer: float, inner: float
     ) -> None:
+        """Status pill — opaque so it stays readable over pads / hub rim."""
+        _ = inner
         font = QFont(self.font())
         font.setPointSize(9)
         font.setBold(True)
         painter.setFont(font)
         fm = QFontMetrics(font)
-        max_w = int(outer * 1.35)
-        text = fm.elidedText(self._banner, Qt.TextElideMode.ElideMiddle, max_w)
-        # Sit in the air gap between hub and pads so it stays readable.
+        max_w = int(min(outer * 1.55, self.width() - 24))
+        text = fm.elidedText(self._banner, Qt.TextElideMode.ElideMiddle, max_w - 20)
+        text_w = fm.horizontalAdvance(text)
+        pill_h = 24.0
+        pill_w = min(float(max_w), text_w + 20.0)
+
         _, _, _, hub = self._geometry()
-        y = c.y() + (hub + inner) / 2.0
-        rect = QRectF(c.x() - max_w / 2, y - 10, max_w, 20)
+        # Chip mode clusters pads at the top → use the open south arc.
+        # Full ring: float just under the hub, over whatever pad is there.
+        if self._chip_mode():
+            y = c.y() + outer * 0.70
+        else:
+            y = c.y() + hub + 14.0
+            # Keep the pill inside the circular orb.
+            y = min(y, c.y() + outer - pill_h / 2 - 4.0)
+
+        rect = QRectF(c.x() - pill_w / 2, y - pill_h / 2, pill_w, pill_h)
+        painter.setPen(QPen(QColor("#94a3b8"), 1.2))
+        painter.setBrush(QColor(255, 255, 255, 245))
+        painter.drawRoundedRect(rect, pill_h / 2, pill_h / 2)
         painter.setPen(self._banner_color)
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
     def _paint_hub_text(self, painter: QPainter, hub_rect: QRectF) -> None:
+        """Brand/file mark + label + hint, vertically centered as one stack."""
         single_line = not (self._has_file and self._segments)
-        pad = 10 if single_line else 16
+        pad = 14
         avail = max(48, int(hub_rect.width() - pad * 2))
-        sub = "drag to a pad" if (self._has_file and self._segments) else self._center_sub
-        # Leave room for subtitle when present; otherwise center the title alone.
-        if sub:
-            name_rect = QRectF(
-                hub_rect.left() + pad,
-                hub_rect.center().y() - 28,
-                hub_rect.width() - pad * 2,
-                36,
-            )
+        if self._has_file and len(self._segments) == 1:
+            sub = f"drag to {self._segments[0].operation.segment_label}"
+        elif self._has_file and self._segments:
+            sub = "drag to a pad"
         else:
-            name_rect = QRectF(
-                hub_rect.left() + pad,
-                hub_rect.center().y() - 18,
-                hub_rect.width() - pad * 2,
-                36,
-            )
+            sub = self._center_sub
+
+        icon_size = min(56.0, hub_rect.width() * 0.34)
+        gap_icon = 10.0
+        gap_sub = 4.0
 
         font = QFont(self.font())
         font.setBold(True)
         label = self._center_label
-        # Brand / empty hub: keep one line (never "OmniConv" / "ert").
-        # Filenames may wrap to 2 lines after a file is loaded.
-        point = 13 if single_line else 11
+        point = 13 if single_line else 10
         lines: list[str] = [label]
         while point >= 7:
             font.setPointSize(point)
@@ -323,40 +414,56 @@ class RadialWheel(QWidget):
                     break
             else:
                 lines = self._wrap_filename(label, fm, avail, max_lines=2)
-                block_h = fm.lineSpacing() * len(lines)
                 widest = max((fm.horizontalAdvance(ln) for ln in lines), default=0)
-                if block_h <= name_rect.height() and widest <= avail:
+                if widest <= avail:
                     break
             point -= 1
         else:
             fm = QFontMetrics(font)
             lines = [fm.elidedText(label, Qt.TextElideMode.ElideMiddle, avail)]
 
+        fm = QFontMetrics(font)
+        name_h = fm.lineSpacing() * len(lines)
+
+        sub_font = QFont(self.font())
+        sub_font.setPointSize(8)
+        sub_font.setBold(False)
+        sub_fm = QFontMetrics(sub_font)
+        sub_h = sub_fm.height() if sub else 0.0
+
+        stack_h = icon_size + gap_icon + name_h + (gap_sub + sub_h if sub else 0.0)
+        top = hub_rect.center().y() - stack_h / 2.0
+
+        icon_rect = QRectF(
+            hub_rect.center().x() - icon_size / 2,
+            top,
+            icon_size,
+            icon_size,
+        )
+        if self._has_file:
+            paint_file_mark(painter, icon_rect, QColor("#2563eb"))
+        else:
+            paint_convert_mark(painter, icon_rect, QColor("#2563eb"))
+
+        y = icon_rect.bottom() + gap_icon
         painter.setPen(self._text)
         painter.setFont(font)
-        fm = QFontMetrics(font)
-        total_h = fm.lineSpacing() * len(lines)
-        y = name_rect.center().y() - total_h / 2
         for ln in lines:
-            line_rect = QRectF(name_rect.left(), y, name_rect.width(), fm.lineSpacing())
+            line_rect = QRectF(hub_rect.left() + pad, y, hub_rect.width() - pad * 2, fm.lineSpacing())
             painter.drawText(line_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, ln)
             y += fm.lineSpacing()
 
         if sub:
             painter.setPen(self._muted)
-            sub_font = QFont(self.font())
-            sub_font.setPointSize(8)
-            sub_font.setBold(False)
             painter.setFont(sub_font)
-            sub_fm = QFontMetrics(sub_font)
-            sub = sub_fm.elidedText(sub, Qt.TextElideMode.ElideMiddle, avail)
+            shown = sub_fm.elidedText(sub, Qt.TextElideMode.ElideMiddle, avail)
             sub_rect = QRectF(
                 hub_rect.left() + pad,
-                hub_rect.center().y() + 14,
+                y + gap_sub,
                 hub_rect.width() - pad * 2,
-                16,
+                sub_h,
             )
-            painter.drawText(sub_rect, Qt.AlignmentFlag.AlignCenter, sub)
+            painter.drawText(sub_rect, Qt.AlignmentFlag.AlignCenter, shown)
 
     def _wrap_filename(self, text: str, fm: QFontMetrics, max_width: int, max_lines: int = 2) -> list[str]:
         """Wrap a filename onto up to max_lines; elide last line if still too long."""
@@ -406,6 +513,146 @@ class RadialWheel(QWidget):
         path.closeSubpath()
         return path
 
+    def _chip_rect(
+        self,
+        c: QPointF,
+        outer: float,
+        inner: float,
+        seg: _Segment,
+        index: int,
+    ) -> QRectF:
+        pop = self._pop[index] if index < len(self._pop) else 0.0
+        breathe = 0.5 + 0.5 * math.sin(self._pulse_phase + index * 0.9)
+        grow = outer * _POP_SCALE * max(pop, 0.18 * breathe)
+        r = (outer + inner) / 2.0 + grow * 0.35
+        pt = _point_on_circle(c, r, seg.mid_angle_deg)
+        # Scale chips to the action band so they feel like pad wedges, not huge cards.
+        band = max(48.0, outer - inner)
+        n = max(len(self._segments), 1)
+        base = 1.08 if n == 1 else (1.0 if n == 2 else 0.92)
+        w = min(92.0, max(70.0, band * 1.05 * base))
+        h = min(80.0, max(62.0, band * 0.95 * base))
+        w += 6.0 * pop
+        h += 5.0 * pop
+        return QRectF(pt.x() - w / 2.0, pt.y() - h / 2.0, w, h)
+
+    def _paint_drag_hints(
+        self,
+        painter: QPainter,
+        c: QPointF,
+        hub: float,
+        inner: float,
+        outer: float,
+    ) -> None:
+        """Animated chevrons from hub toward each action chip."""
+        if self._puck_dragging:
+            return
+        breathe = 0.5 + 0.5 * math.sin(self._pulse_phase)
+        for i, seg in enumerate(self._segments):
+            pop = self._pop[i] if i < len(self._pop) else 0.0
+            if pop > 0.55:
+                continue
+            start_r = hub + 6.0
+            end_r = (inner + outer) / 2.0 - 28.0
+            if end_r <= start_r + 8:
+                continue
+            for step in (0.28, 0.52, 0.76):
+                # March chevrons outward with the pulse.
+                t = (step + 0.12 * breathe) % 1.0
+                if t < 0.12 or t > 0.92:
+                    continue
+                r = start_r + (end_r - start_r) * t
+                pt = _point_on_circle(c, r, seg.mid_angle_deg)
+                alpha = int(40 + 110 * (1.0 - abs(t - 0.5) * 1.6) * (0.55 + 0.45 * breathe))
+                color = QColor(self._pad_hot)
+                color.setAlpha(max(0, min(180, alpha)))
+                self._paint_chevron(painter, pt, seg.mid_angle_deg, color)
+
+    def _paint_chevron(
+        self, painter: QPainter, tip: QPointF, qt_angle_deg: float, color: QColor
+    ) -> None:
+        rad = math.radians(qt_angle_deg)
+        # Point outward along the ray from hub center.
+        dx, dy = math.cos(rad), -math.sin(rad)
+        px, py = -dy, dx
+        size = 7.0
+        back = QPointF(tip.x() - dx * size, tip.y() - dy * size)
+        left = QPointF(back.x() + px * size * 0.7, back.y() + py * size * 0.7)
+        right = QPointF(back.x() - px * size * 0.7, back.y() - py * size * 0.7)
+        path = QPainterPath()
+        path.moveTo(tip)
+        path.lineTo(left)
+        path.lineTo(right)
+        path.closeSubpath()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawPath(path)
+
+    def _paint_action_chip(
+        self,
+        painter: QPainter,
+        c: QPointF,
+        outer: float,
+        inner: float,
+        seg: _Segment,
+        index: int,
+    ) -> None:
+        """Rounded interactive chip — clearer affordance than a lonely wedge."""
+        pop = self._pop[index] if index < len(self._pop) else 0.0
+        hot = pop > 0.15
+        breathe = 0.5 + 0.5 * math.sin(self._pulse_phase + index * 0.9)
+        rect = self._chip_rect(c, outer, inner, seg, index)
+        radius = 16.0
+
+        # Light shadow only — no soft blue blur (matches pad / hub chrome).
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._pad_shadow)
+        painter.drawRoundedRect(
+            rect.translated(0, 2 + 2 * pop), radius, radius
+        )
+
+        # Card body with light gradient
+        grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        if hot:
+            grad.setColorAt(0.0, QColor("#3b82f6"))
+            grad.setColorAt(1.0, QColor("#1d4ed8"))
+        else:
+            grad.setColorAt(0.0, QColor("#eff6ff"))
+            grad.setColorAt(1.0, QColor("#dbeafe"))
+        painter.setBrush(grad)
+        # Crisp blue stroke — same language as hub rim and pad outlines.
+        rim_w = 2.4 if hot else (1.8 + 0.4 * breathe)
+        painter.setPen(QPen(self._pad_hot if hot else QColor("#2563eb"), rim_w))
+        painter.drawRoundedRect(rect, radius, radius)
+
+        label = seg.operation.segment_label
+        # Square icon tile — avoids PDF/letter glyphs getting clipped.
+        side = min(40.0, rect.width() * 0.52) + 4.0 * pop
+        icon_rect = QRectF(
+            rect.center().x() - side / 2,
+            rect.top() + 10,
+            side,
+            side,
+        )
+        paint_format_icon(
+            painter,
+            icon_rect,
+            format_id=seg.operation.target_format,
+            label=label,
+            hot=hot,
+        )
+
+        painter.setPen(self._label_on_hot if hot else self._text)
+        font = QFont(self.font())
+        font.setPointSize(12 if hot else 11)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(
+            QRectF(rect.left(), icon_rect.bottom() + 4, rect.width(), 20),
+            Qt.AlignmentFlag.AlignCenter,
+            label,
+        )
+
     def _paint_pad(
         self,
         painter: QPainter,
@@ -417,18 +664,19 @@ class RadialWheel(QWidget):
     ) -> None:
         pop = self._pop[index] if index < len(self._pop) else 0.0
         hot = pop > 0.15
-        # Grow outward (and slightly thicker) when dragged onto / hovered.
-        grow = outer * _POP_SCALE * pop
+        # Idle float matches chip mode (staggered per pad); hover still pops more.
+        breathe = 0.5 + 0.5 * math.sin(self._pulse_phase + index * 0.9)
+        idle = 0.18 * breathe
+        grow = outer * _POP_SCALE * max(pop, idle)
         pad_outer = outer + grow
         pad_inner = max(inner - grow * 0.15, inner * 0.92)
         path = self._pad_path(c, pad_outer, pad_inner, seg.start_angle_deg, seg.span_deg)
 
-        if pop > 0.05:
-            # Soft shadow under the popped pad.
+        if pop > 0.05 or idle > 0.08:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(self._pad_shadow)
             shadow = self._pad_path(
-                QPointF(c.x(), c.y() + 3 + 4 * pop),
+                QPointF(c.x(), c.y() + 2 + 3 * max(pop, idle)),
                 pad_outer,
                 pad_inner,
                 seg.start_angle_deg,
@@ -436,7 +684,9 @@ class RadialWheel(QWidget):
             )
             painter.drawPath(shadow)
 
-        painter.setPen(QPen(self._pad_hot if hot else self._pad_line, 2.0 if hot else 1.5))
+        # Crisp outline (no soft blur halo) — matches chips + hub.
+        rim_w = 2.2 if hot else (1.6 + 0.35 * breathe)
+        painter.setPen(QPen(self._pad_hot if hot else QColor("#2563eb"), rim_w))
         fill = QColor(self._pad_hot if hot else self._pad)
         if hot:
             fill.setAlpha(int(200 + 55 * pop))
@@ -444,14 +694,23 @@ class RadialWheel(QWidget):
         painter.drawPath(path)
 
         pt = _point_on_circle(c, (pad_outer + pad_inner) / 2.0, seg.mid_angle_deg)
+        label = seg.operation.segment_label
+        side = 32.0
+        icon_rect = QRectF(pt.x() - side / 2, pt.y() - side / 2 - 6, side, side)
+        paint_format_icon(
+            painter,
+            icon_rect,
+            format_id=seg.operation.target_format,
+            label=label,
+            hot=hot,
+        )
         painter.setPen(self._label_on_hot if hot else self._text)
         font = QFont(self.font())
-        font.setPointSize(13 if hot else 11)
+        font.setPointSize(10 if hot else 9)
         font.setBold(True)
         painter.setFont(font)
-        label = seg.operation.segment_label
         painter.drawText(
-            QRectF(pt.x() - 46, pt.y() - 14, 92, 28),
+            QRectF(pt.x() - 40, icon_rect.bottom() + 2, 80, 18),
             Qt.AlignmentFlag.AlignCenter,
             label,
         )
@@ -510,25 +769,23 @@ class RadialWheel(QWidget):
         self._window_dragging = False
         self._window_drag_offset = None
 
-        # Outer rim (with a file loaded) — drag the whole orb.
+        # Reposition: outer rim, air-gap ring, or Alt/Meta+hub (works with a file too).
+        alt_move = bool(
+            event.modifiers()
+            & (Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier)
+        )
         if self._has_file and self._segments and self._is_on_move_rim(pos):
             self._start_system_or_fallback_move(event)
             event.accept()
             return
-
-        # Empty (or any) hub outer ring: move on press (required on Wayland).
-        if idx == -2 and self._hub_drag_zone(pos) and not (
-            self._has_file and self._segments and self._enabled
-        ):
+        if idx == -2 and alt_move:
             self._start_system_or_fallback_move(event)
             event.accept()
             return
 
-        # Empty hub: also allow Alt/Meta + press anywhere on hub to move.
-        if (
-            idx == -2
-            and not (self._has_file and self._segments)
-            and (event.modifiers() & (Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier))
+        # Empty hub outer ring: move on press (required on Wayland).
+        if idx == -2 and self._hub_drag_zone(pos) and not (
+            self._has_file and self._segments and self._enabled
         ):
             self._start_system_or_fallback_move(event)
             event.accept()
@@ -551,10 +808,21 @@ class RadialWheel(QWidget):
         event.ignore()
 
     def _is_on_move_rim(self, pos: QPointF) -> bool:
-        """Thin outer band used to reposition the orb after a file is loaded."""
-        _, outer, inner, _ = self._geometry()
+        """Bands used to reposition the orb after a file is loaded.
+
+        Includes the air gap between hub and pads (easier to grab) plus the
+        outer rim — so the orb does not feel stuck once pads appear.
+        """
+        _, outer, inner, hub = self._geometry()
         d = self._dist_from_center(pos)
-        return (outer - 22.0) <= d <= outer + 2.0
+        in_gap = (hub + 2.0) <= d <= max(inner - 2.0, hub + 4.0)
+        on_edge = (outer - 28.0) <= d <= outer + 4.0
+        # Also allow empty gaps between pad wedges (not on a pad).
+        if in_gap or on_edge:
+            return True
+        if d > hub + 2.0 and d < outer - 4.0 and self._index_for_pos(pos) < 0:
+            return True
+        return False
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         pos = event.position()
@@ -603,7 +871,11 @@ class RadialWheel(QWidget):
             self._hover_index = hover
             self.update()
         if (self._has_file and self._is_on_move_rim(pos)) or (
-            idx == -2 and self._hub_drag_zone(pos) and not (self._has_file and self._segments)
+            idx == -2
+            and (
+                self._hub_drag_zone(pos)
+                and not (self._has_file and self._segments)
+            )
         ):
             self.setCursor(Qt.CursorShape.SizeAllCursor)
         elif idx == -2 or idx >= 0:
@@ -686,12 +958,15 @@ class RadialWheel(QWidget):
         urls = event.mimeData().urls()
         if not urls:
             return
-        path = urls[0].toLocalFile()
-        if not path:
+        paths = [u.toLocalFile() for u in urls if u.toLocalFile()]
+        if not paths:
             return
         idx = self._index_for_pos(event.position())
-        self.fileDropped.emit(path)
-        if idx >= 0 and self._has_file and self._enabled and self._segments:
-            self._selected_index = idx
-            self.formatSelected.emit(self._segments[idx].operation.operation_id)
+        if len(paths) > 1:
+            self.filesDropped.emit(paths)
+        else:
+            self.fileDropped.emit(paths[0])
+            if idx >= 0 and self._has_file and self._enabled and self._segments:
+                self._selected_index = idx
+                self.formatSelected.emit(self._segments[idx].operation.operation_id)
         event.acceptProposedAction()
