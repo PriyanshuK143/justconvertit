@@ -462,7 +462,6 @@ def paint_format_icon(
     hot: bool = False,
 ) -> None:
     """Draw a distinctive symbol for each supported format, clipped to the tile."""
-    _ = label
     painter.save()
     _aa(painter)
     # Clip so glyphs can never spill outside the white tile.
@@ -475,6 +474,11 @@ def paint_format_icon(
     # Generous inner margin — fixes PDF/letter overflow on small pads.
     r = _inset(rect, 0.12)
     color = _accent(format_id)
+
+    if (label or "").strip().lower().startswith("more"):
+        _paint_letter_badge(painter, r, color, "···")
+        painter.restore()
+        return
 
     dispatch = {
         FormatId.PNG: lambda: _paint_landscape(painter, r, color),

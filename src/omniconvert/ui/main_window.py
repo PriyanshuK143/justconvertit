@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer
@@ -56,11 +57,13 @@ from omniconvert.ui.dialogs import (
 from omniconvert.ui.radial_wheel import RadialWheel
 from omniconvert.ui.save_dialog import SaveAsDialog
 from omniconvert.ui.theme import apply_theme
+from omniconvert.ui.wheel_actions import split_wheel_actions
 from omniconvert.version import __version__
 
 log = logging.getLogger("omniconvert.ui")
 
-ORB_SIZE = 440
+# Slightly larger on Windows so action chips stay readable under HiDPI scaling.
+ORB_SIZE = 500 if sys.platform.startswith("win") else 460
 # Launch shows only the center button; expands to ORB_SIZE after a file is loaded.
 HUB_SIZE = 240
 
@@ -169,6 +172,7 @@ class MainWindow(QWidget):
         self._batch_active = False
         self._batch_ok = 0
         self._batch_fail = 0
+        self._overflow_ops: list[ConversionOperation] = []
         self._always_on_top = True
         self._hover_chrome = False
         self._status_text = "Click center to open"
@@ -552,28 +556,36 @@ class MainWindow(QWidget):
             log.exception("registry lookup failed: %s", exc)
             ops = []
 
+        wheel_ops, overflow = split_wheel_actions(ops)
         self._current_ops = ops
-        labels = [op.segment_label for op in ops[:8]]
-        log.info("Loaded %s → %d ops: %s", detected.format_id, len(ops), labels)
+        self._overflow_ops = overflow
+        labels = [op.segment_label for op in wheel_ops]
+        log.info(
+            "Loaded %s → %d ops (%d on wheel, %d overflow): %s",
+            detected.format_id,
+            len(ops),
+            len(wheel_ops),
+            len(overflow),
+            labels,
+        )
 
         # Prefer original filename for display (not a truncated stem-only guess).
         display_name = self._source_path.name
         # Expand from center-only hub to the full format wheel.
         self._set_orb_size(ORB_SIZE)
-        self.wheel.set_operations(ops)
+        self.wheel.set_operations(wheel_ops)
         self.wheel.set_has_file(True)
         self.wheel.set_center_text(
             display_name,
             f"{detected.format_id.label} · {format_size(detected.size_bytes)}",
         )
-        self.wheel.set_wheel_enabled(bool(ops))
+        self.wheel.set_wheel_enabled(bool(wheel_ops))
 
         # Do not repeat format names here — pads already show them.
         if not ops:
             self._set_status(f"No conversions for {detected.format_id.label}", "err")
         else:
             self._set_status("", "info")  # clear banner; hub says "drag to a pad"
-        _ = labels
 
     def _on_format_selected_deferred(self, operation_id: str) -> None:
         QTimer.singleShot(0, lambda: self._on_format_selected(operation_id))
@@ -584,6 +596,9 @@ class MainWindow(QWidget):
             return
         if self.jobs.is_busy:
             self._set_status("Already converting…", "info")
+            return
+        if operation_id == "ui.more_actions":
+            self._show_more_actions_menu()
             return
         try:
             op = self.registry.get_operation(operation_id)
@@ -681,6 +696,25 @@ class MainWindow(QWidget):
         for spec in op.settings:
             values.setdefault(spec.key, spec.default)
         return values
+
+    def _show_more_actions_menu(self) -> None:
+        """Overflow conversions that did not fit on the orb."""
+        if not self._overflow_ops:
+            self._set_status("No extra actions", "info")
+            return
+        menu = QMenu(self)
+        menu.setTitle("More conversions")
+        for op in self._overflow_ops:
+            act = menu.addAction(op.label)
+            act.setData(op.operation_id)
+        chosen = menu.exec(self.mapToGlobal(self.rect().center()))
+        if chosen is None:
+            self._set_status("Cancelled", "info")
+            QTimer.singleShot(1800, lambda: self._set_status("", "info"))
+            return
+        op_id = chosen.data()
+        if isinstance(op_id, str) and op_id:
+            self._on_format_selected(op_id)
 
     def _start_conversion(
         self,
@@ -949,6 +983,16 @@ class MainWindow(QWidget):
         # "ok" uses black — green was hard to read on the blue pad ring.
         color = {"ok": "#0f172a", "err": "#b91c1c", "info": "#334155"}.get(kind, "#334155")
         self.wheel.set_banner(text, color)
+        # Auto-clear transient banners so "Cancelled" does not stick over chips.
+        lowered = (text or "").strip().lower()
+        if lowered in {"cancelled", "canceled"} or (
+            kind == "info" and lowered.startswith("cancelled")
+        ):
+            QTimer.singleShot(1600, lambda: self._clear_transient_banner(text))
+
+    def _clear_transient_banner(self, expected: str) -> None:
+        if self._status_text == expected:
+            self._set_status("", "info")
 
     def _browse_output(self) -> None:
         start = str(self._output_dir or Path.home())
@@ -984,8 +1028,11 @@ class MainWindow(QWidget):
                 self._output_dir = Path(self.settings.default_output_dir)
             # Refresh wheel pads if a file is loaded (optional engines may appear/disappear).
             if self.detected is not None:
-                self._current_ops = self.registry.available_operations_for(self.detected.format_id)
-                self.wheel.set_operations(self._current_ops)
+                ops = self.registry.available_operations_for(self.detected.format_id)
+                wheel_ops, overflow = split_wheel_actions(ops)
+                self._current_ops = ops
+                self._overflow_ops = overflow
+                self.wheel.set_operations(wheel_ops)
             self._set_status("Settings saved", "ok")
 
     def open_about(self) -> None:

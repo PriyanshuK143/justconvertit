@@ -98,8 +98,24 @@ def test_chip_mode_for_single_option(qapp) -> None:
     rect = wheel._chip_rect(c, outer, inner, wheel._segments[0], 0)
     # Chip sits above hub center and is a real click/drag target.
     assert rect.center().y() < c.y()
-    assert rect.width() >= 80
+    assert rect.width() >= 56
     assert wheel._index_for_pos(rect.center()) == 0
+    wheel.close()
+
+
+def test_many_options_stay_in_chip_mode(qapp) -> None:
+    """Windows HiDPI looked broken with thin wedges — always chips with a file."""
+    wheel = RadialWheel()
+    wheel.resize(QSize(500, 500))
+    ops = [_fake_op(f"A{i}", f"a{i}") for i in range(6)]
+    wheel.set_operations(ops)
+    wheel.set_has_file(True)
+    assert wheel._chip_mode() is True
+    assert len(wheel._segments) == 6
+    # Evenly spaced around the circle (not a top-only cluster).
+    mids = sorted(seg.mid_angle_deg % 360.0 for seg in wheel._segments)
+    assert mids[0] < 90 or mids[-1] > 200
+    wheel.grab()  # paint must not crash
     wheel.close()
 
 

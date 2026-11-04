@@ -23,19 +23,16 @@ from omniconvert.product import APP_NAME
 from omniconvert.ui.icons import paint_convert_mark, paint_file_mark, paint_format_icon
 
 _MAX_PADS = 8
-# Fraction of each slice used by the pad (rest is a slim gap between sides).
-_PAD_FILL = 0.86
 # Cap so a single option never becomes a near-full C-ring.
 _MAX_PAD_SPAN_DEG = 56.0
 _SINGLE_PAD_SPAN_DEG = 58.0
 _CLUSTER_GAP_DEG = 12.0
 # How far a hovered pad grows outward when it "pops".
-_POP_SCALE = 0.12
+_POP_SCALE = 0.08
 # Shared layout for chip + full-ring modes (same hub / gap proportions).
-_HUB_FRAC = 0.42
-_HUB_PAD_GAP = 0.09
-# Few-option mode uses chunky action chips instead of thin wedges.
-_CHIP_MODE_MAX = 3
+_HUB_FRAC = 0.40
+_HUB_PAD_GAP = 0.10
+# Thin wedges look broken on Windows HiDPI — always use action chips with a file.
 
 
 @dataclass
@@ -160,16 +157,14 @@ class RadialWheel(QWidget):
         return None
 
     def _chip_mode(self) -> bool:
-        """Few options → rounded action chips (more interactive than thin wedges)."""
-        n = len(self._segments) if self._segments else len(self._operations)
-        return bool(self._has_file and 0 < n <= _CHIP_MODE_MAX)
+        """Action chips only — wedge pads overlap / clip badly on Windows HiDPI."""
+        return bool(self._has_file and self._segments)
 
     def _rebuild_segments(self) -> None:
-        """Place pads around the hub.
+        """Place action chips around the hub (never thin overlapping wedges).
 
-        1–4 options: compact chips clustered near the top (avoids a huge empty
-        ring with one C-shaped remnant). 5–8: even full-circle layout with a
-        capped span so pads stay detached.
+        1–3 options: compact cluster near the top.
+        4–8 options: even spacing around the circle so chips do not collide.
         """
         self._segments.clear()
         n = len(self._operations)
@@ -183,11 +178,10 @@ class RadialWheel(QWidget):
             self._segments.append(_Segment(self._operations[0], start, span, mid))
             return
 
-        if n <= 4:
+        if n <= 3:
             span = min(_MAX_PAD_SPAN_DEG, 46.0 + (4 - n) * 3.0)
             step = span + _CLUSTER_GAP_DEG
             total = n * span + (n - 1) * _CLUSTER_GAP_DEG
-            # Cluster centered on top (90°), spreading left/right.
             first_mid = 90.0 + total / 2.0 - span / 2.0
             for i, op in enumerate(self._operations):
                 mid = (first_mid - i * step) % 360.0
@@ -195,10 +189,11 @@ class RadialWheel(QWidget):
                 self._segments.append(_Segment(op, start, span, mid))
             return
 
+        # Full circle of chips — equal gaps, no wedge fill.
         slot = 360.0 / n
-        span = min(slot * _PAD_FILL, _MAX_PAD_SPAN_DEG)
+        span = min(42.0, slot * 0.55)
         for i, op in enumerate(self._operations):
-            mid = (90.0 - i * slot) % 360.0  # clockwise from top
+            mid = (90.0 - i * slot) % 360.0
             start = (mid - span / 2.0) % 360.0
             self._segments.append(_Segment(op, start, span, mid))
 
@@ -263,9 +258,9 @@ class RadialWheel(QWidget):
             self._pop_timer.stop()
             return
         changed = False
-        # Idle breathe so pads feel interactive even before hover.
+        # Gentle idle pulse — keep small so chips never look stacked on Windows.
         if self._has_file and self._segments and not self._puck_dragging:
-            self._pulse_phase = (self._pulse_phase + 0.07) % (math.pi * 2.0)
+            self._pulse_phase = (self._pulse_phase + 0.03) % (math.pi * 2.0)
             changed = True
         for i in range(len(self._pop)):
             target = 1.0 if i == self._hover_index or i == self._selected_index else 0.0
@@ -283,7 +278,9 @@ class RadialWheel(QWidget):
         _ = event
         painter = QPainter(self)
         try:
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
             c, outer, inner, hub = self._geometry()
 
@@ -294,14 +291,10 @@ class RadialWheel(QWidget):
 
             show_pads = bool(self._has_file and self._segments)
             if show_pads:
-                # Same floating chevrons + idle motion for few chips and full ring.
                 self._paint_drag_hints(painter, c, hub, inner, outer)
-                if self._chip_mode():
-                    for i, seg in enumerate(self._segments):
-                        self._paint_action_chip(painter, c, outer, inner, seg, i)
-                else:
-                    for i, seg in enumerate(self._segments):
-                        self._paint_pad(painter, c, outer, inner, seg, i)
+                # Always chips with a file — never thin overlapping wedges.
+                for i, seg in enumerate(self._segments):
+                    self._paint_action_chip(painter, c, outer, inner, seg, i)
 
             hub_rect = QRectF(c.x() - hub, c.y() - hub, hub * 2, hub * 2)
             self._paint_hub_chrome(painter, c, hub, hub_rect)
@@ -392,7 +385,7 @@ class RadialWheel(QWidget):
         if self._has_file and len(self._segments) == 1:
             sub = f"drag to {self._segments[0].operation.segment_label}"
         elif self._has_file and self._segments:
-            sub = "drag to a pad"
+            sub = "drag to an action"
         else:
             sub = self._center_sub
 
@@ -523,17 +516,22 @@ class RadialWheel(QWidget):
     ) -> QRectF:
         pop = self._pop[index] if index < len(self._pop) else 0.0
         breathe = 0.5 + 0.5 * math.sin(self._pulse_phase + index * 0.9)
-        grow = outer * _POP_SCALE * max(pop, 0.18 * breathe)
-        r = (outer + inner) / 2.0 + grow * 0.35
+        grow = outer * _POP_SCALE * max(pop, 0.06 * breathe)
+        r = (outer + inner) / 2.0 + grow * 0.25
         pt = _point_on_circle(c, r, seg.mid_angle_deg)
-        # Scale chips to the action band so they feel like pad wedges, not huge cards.
+        # Scale chips down when many actions share the ring (Windows HiDPI safety).
         band = max(48.0, outer - inner)
         n = max(len(self._segments), 1)
-        base = 1.08 if n == 1 else (1.0 if n == 2 else 0.92)
-        w = min(92.0, max(70.0, band * 1.05 * base))
-        h = min(80.0, max(62.0, band * 0.95 * base))
-        w += 6.0 * pop
-        h += 5.0 * pop
+        if n <= 2:
+            base_w, base_h = 88.0, 76.0
+        elif n <= 4:
+            base_w, base_h = 78.0, 68.0
+        else:
+            base_w, base_h = 68.0, 60.0
+        w = min(base_w, max(56.0, band * (0.95 if n <= 4 else 0.82)))
+        h = min(base_h, max(50.0, band * (0.88 if n <= 4 else 0.75)))
+        w += 4.0 * pop
+        h += 3.0 * pop
         return QRectF(pt.x() - w / 2.0, pt.y() - h / 2.0, w, h)
 
     def _paint_drag_hints(
