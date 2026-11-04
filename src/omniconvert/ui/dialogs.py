@@ -28,6 +28,7 @@ from omniconvert.product import ABOUT_BLURB, APP_NAME, PRIVACY_SUMMARY
 from omniconvert.services.dependencies import get_dependency_service
 from omniconvert.services.engine_setup import (
     EngineSetupResult,
+    install_engines,
     install_recommended_engines,
     linux_manual_hint,
     windows_manual_hint,
@@ -40,15 +41,37 @@ from omniconvert.version import __version__
 class _EngineInstallWorker(QThread):
     finished_result = Signal(object)
 
+    def __init__(
+        self,
+        packages: tuple[str, ...] = ("ffmpeg", "libreoffice"),
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._packages = packages
+
     def run(self) -> None:  # noqa: N802
-        self.finished_result.emit(install_recommended_engines())
+        if set(self._packages) == {"ffmpeg", "libreoffice"}:
+            self.finished_result.emit(install_recommended_engines())
+        else:
+            self.finished_result.emit(install_engines(self._packages))
 
 
-def run_engine_install_with_ui(parent: QWidget | None = None) -> EngineSetupResult:
+def run_engine_install_with_ui(
+    parent: QWidget | None = None,
+    *,
+    packages: tuple[str, ...] = ("ffmpeg", "libreoffice"),
+) -> EngineSetupResult:
     """Show a blocking progress dialog while apt/winget installs optional engines."""
+    labels = []
+    if "ffmpeg" in packages:
+        labels.append("FFmpeg")
+    if "libreoffice" in packages:
+        labels.append("LibreOffice")
+    label = " and ".join(labels) if labels else "optional tools"
+    manager = "winget" if sys.platform.startswith("win") else "apt"
     progress = QProgressDialog(
-        "Installing LibreOffice and FFmpeg via your system package manager…\n"
-        "This needs internet and may take several minutes.",
+        f"Installing {label} via {manager}…\n"
+        "Needs internet. Windows may show a winget / UAC prompt.",
         None,
         0,
         0,
@@ -61,7 +84,7 @@ def run_engine_install_with_ui(parent: QWidget | None = None) -> EngineSetupResu
     progress.show()
     QApplication.processEvents()
 
-    worker = _EngineInstallWorker(parent)
+    worker = _EngineInstallWorker(packages=packages, parent=parent)
     result_box: list[EngineSetupResult] = []
 
     def _done(result: object) -> None:
@@ -108,15 +131,13 @@ class FirstRunEnginesDialog(QDialog):
         layout.addWidget(title)
 
         body = QLabel(
-            f"For the best Office ↔ PDF quality and audio conversions, {APP_NAME} "
-            "can install LibreOffice and FFmpeg once using your system package "
-            "manager.\n\n"
-            "What changes:\n"
-            "• Downloads and installs system packages (LibreOffice + FFmpeg)\n"
-            "• Needs internet and an admin/password prompt from your OS\n"
-            f"• Packages stay on your system; uninstalling {APP_NAME} does not remove them\n\n"
-            "Core conversions still work without them. Skip now and install later "
-            "from Settings if you prefer."
+            f"Optional: {APP_NAME} can install LibreOffice and FFmpeg with apt "
+            "for Office↔PDF and audio/video conversions.\n\n"
+            "• Needs internet and your password once\n"
+            f"• Stays on the system if you uninstall {APP_NAME}\n"
+            "• Skip anytime — core image/PDF/document tools already work offline\n\n"
+            "On Windows this prompt is skipped; tools install only when you use a "
+            "feature that needs them (or from Settings)."
         )
         body.setWordWrap(True)
         layout.addWidget(body)
@@ -280,15 +301,22 @@ class SettingsDialog(QDialog):
         refresh = QPushButton("Re-check tools")
         refresh.setToolTip("Look again for LibreOffice and FFmpeg.")
         refresh.clicked.connect(self._refresh_deps)
-        install = QPushButton("Install LibreOffice + FFmpeg…")
-        install.setToolTip(
-            "Install via apt (Linux) or winget (Windows). Needs internet and admin once."
+        install_ff = QPushButton("Install FFmpeg…")
+        install_ff.setToolTip(
+            "Install FFmpeg only via winget (Windows) or apt (Linux). "
+            "Needed for audio/video conversions."
         )
-        install.clicked.connect(self._install_engines)
+        install_ff.clicked.connect(lambda: self._install_engines(("ffmpeg",)))
+        install_lo = QPushButton("Install LibreOffice…")
+        install_lo.setToolTip(
+            "Install LibreOffice via winget/apt. Needed for high-fidelity Office↔PDF."
+        )
+        install_lo.clicked.connect(lambda: self._install_engines(("libreoffice",)))
         clear = QPushButton("Clear recent history")
         clear.clicked.connect(self._clear_history)
         actions.addWidget(refresh)
-        actions.addWidget(install)
+        actions.addWidget(install_ff)
+        actions.addWidget(install_lo)
         actions.addWidget(clear)
         layout.addLayout(actions)
 
@@ -331,9 +359,9 @@ class SettingsDialog(QDialog):
     def _refresh_deps(self) -> None:
         self._apply_path_overrides(probe_versions=True)
 
-    def _install_engines(self) -> None:
-        result = run_engine_install_with_ui(self)
-        self._apply_path_overrides(probe_versions=False)
+    def _install_engines(self, packages: tuple[str, ...] = ("ffmpeg", "libreoffice")) -> None:
+        result = run_engine_install_with_ui(self, packages=packages)
+        self._apply_path_overrides(probe_versions=True)
         show_engine_install_result(self, result)
 
     def _browse(self) -> None:

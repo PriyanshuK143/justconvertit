@@ -50,10 +50,24 @@ def test_needs_engine_setup_false_when_both_present() -> None:
     )
 
 
-def test_needs_engine_setup_true_when_missing() -> None:
+def test_needs_engine_setup_true_when_missing_on_linux(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "omniconvert.services.engine_setup.sys.platform", "linux"
+    )
     assert needs_engine_setup(_deps(lo=True, ff=False), engines_setup_done=False) is True
     assert needs_engine_setup(_deps(lo=False, ff=True), engines_setup_done=False) is True
     assert needs_engine_setup(_deps(lo=False, ff=False), engines_setup_done=False) is True
+
+
+def test_needs_engine_setup_never_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "omniconvert.services.engine_setup.sys.platform", "win32"
+    )
+    assert (
+        needs_engine_setup(_deps(lo=False, ff=False), engines_setup_done=False) is False
+    )
 
 
 def test_linux_install_command_uses_apt_packages(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,6 +100,17 @@ def test_windows_winget_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "TheDocumentFoundation.LibreOffice" in flat
     assert "Gyan.FFmpeg" in flat
     assert "--accept-package-agreements" in flat
+
+
+def test_windows_winget_ffmpeg_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "omniconvert.services.engine_setup.shutil.which",
+        lambda name: "C:\\winget.exe" if name == "winget" else None,
+    )
+    cmds = windows_winget_commands(("ffmpeg",))
+    assert len(cmds) == 1
+    assert "Gyan.FFmpeg" in " ".join(cmds[0])
+    assert "LibreOffice" not in " ".join(cmds[0])
 
 
 def test_windows_manual_hint() -> None:

@@ -46,10 +46,21 @@ Primary product target. Build notes: [WINDOWS.md](WINDOWS.md).
 
 ### Install
 
-1. Download `justconvertit-<version>-Setup.exe` from the release page.
-2. Verify the SHA-256 checksum.
+1. Download `JustConvertIt-<version>-Setup.exe` from the release page (or a trusted share).
+2. Verify the SHA-256 checksum when available.
 3. Run the installer (per-user; no admin required by default).
-4. Launch from the Start menu or desktop shortcut.
+4. Open **JustConvertIt** from the Start menu or desktop shortcut (Setup does not auto-launch).
+
+### If Windows blocks the app
+
+Message like **CreateProcess failed; code 4551** / **Application Control policy has blocked this file**:
+
+| PC type | What to do |
+|---------|------------|
+| Personal home PC | SmartScreen / Smart App Control: **More info → Run anyway**. Or Windows Security → App & browser control → check Smart App Control. |
+| School / work laptop | IT policy (AppLocker / WDAC). Install alone cannot bypass it — ask IT to allow JustConvertIt, or use a personal PC. |
+
+This is a Windows trust policy on **unsigned** apps. A paid code-signing certificate is required to avoid it for everyone.
 
 ### Uninstall
 
@@ -60,22 +71,24 @@ The uninstaller removes application files. It does not remove LibreOffice / FFmp
 
 ## Optional local engines (recommended)
 
-On first launch, if LibreOffice or FFmpeg is missing, justconvertit asks once whether
-to install them via your **system package manager** (`apt` on Ubuntu, `winget` on
-Windows). That step needs internet and admin approval. After that, the app stays
-offline.
+Most conversions work with **no** extra installs.
 
-You can also install manually, or retry from **Settings → Install LibreOffice + FFmpeg…**:
+| Tool | Needed for | How it installs |
+|------|------------|-----------------|
+| FFmpeg | Audio/video | Windows: offered when you pick a media conversion, or **Settings → Install FFmpeg…** (winget). Linux: apt / first-run prompt. |
+| LibreOffice | High-fidelity Office ↔ PDF | Same pattern — only when needed, or Settings. |
+
+Windows does **not** nag at startup for these. Install happens with your consent via **winget** (needs internet once). After that, the app stays offline.
 
 ```bash
-# Ubuntu
+# Ubuntu (manual)
 sudo apt-get install -y libreoffice ffmpeg
 ```
 
 ```text
-# Windows (winget)
-winget install -e --id TheDocumentFoundation.LibreOffice
+# Windows (manual winget)
 winget install -e --id Gyan.FFmpeg
+winget install -e --id TheDocumentFoundation.LibreOffice
 ```
 
 | Engine | Enables | How justconvertit finds it |

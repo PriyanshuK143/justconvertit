@@ -1,7 +1,7 @@
-"""One-time optional engine install via the OS package manager.
+"""Optional engine install via the OS package manager (user consent only).
 
-Invokes apt (Linux) or winget (Windows) with user consent. Never downloads
-binaries into the justconvertit tree and never imports network client libraries.
+Invokes apt (Linux) or winget (Windows). Never downloads binaries into the
+justconvertit tree and never imports network client libraries.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import logging
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from omniconvert.platform.subprocess_util import run_capture
@@ -23,6 +24,8 @@ _INSTALL_TIMEOUT_SECONDS = 1800
 # Windows winget package IDs (stable public catalog).
 _WINGET_LIBREOFFICE = "TheDocumentFoundation.LibreOffice"
 _WINGET_FFMPEG = "Gyan.FFmpeg"
+
+_VALID_PACKAGES = frozenset({"ffmpeg", "libreoffice"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,29 +41,50 @@ def needs_engine_setup(
     *,
     engines_setup_done: bool,
 ) -> bool:
-    """True when we should show the first-run optional-tools prompt."""
+    """True when we should show the first-run optional-tools prompt.
+
+    Windows: never nag at startup — install FFmpeg/LibreOffice only when a
+    conversion needs them (or from Settings). Startup popups feel wrong for a
+    portable desktop app.
+    """
     if engines_setup_done:
+        return False
+    if sys.platform.startswith("win"):
         return False
     svc = deps or get_dependency_service()
     return not (svc.libreoffice.available and svc.ffmpeg.available)
 
 
-def linux_install_command() -> list[str]:
+def _normalize_packages(packages: Iterable[str] | None) -> frozenset[str]:
+    if packages is None:
+        return frozenset({"ffmpeg", "libreoffice"})
+    out = frozenset(p.strip().lower() for p in packages if p and p.strip())
+    unknown = out - _VALID_PACKAGES
+    if unknown:
+        raise ValueError(f"Unknown engine package(s): {sorted(unknown)}")
+    if not out:
+        raise ValueError("At least one engine package is required.")
+    return out
+
+
+def linux_install_command(packages: Iterable[str] | None = None) -> list[str]:
     """Preferred elevated apt install argv (pkexec when available)."""
+    pkgs = sorted(_normalize_packages(packages))
     apt = shutil.which("apt-get") or "apt-get"
-    pkgs = ["libreoffice", "ffmpeg"]
     pkexec = shutil.which("pkexec")
     if pkexec:
         return [pkexec, apt, "install", "-y", *pkgs]
     return [apt, "install", "-y", *pkgs]
 
 
-def linux_manual_hint() -> str:
-    return "sudo apt-get install -y libreoffice ffmpeg"
+def linux_manual_hint(packages: Iterable[str] | None = None) -> str:
+    pkgs = " ".join(sorted(_normalize_packages(packages)))
+    return f"sudo apt-get install -y {pkgs}"
 
 
-def windows_winget_commands() -> list[list[str]]:
-    """One winget install command per package."""
+def windows_winget_commands(packages: Iterable[str] | None = None) -> list[list[str]]:
+    """One winget install command per selected package."""
+    wanted = _normalize_packages(packages)
     winget = shutil.which("winget") or "winget"
     common = [
         "install",
@@ -68,44 +92,55 @@ def windows_winget_commands() -> list[list[str]]:
         "--accept-package-agreements",
         "--accept-source-agreements",
     ]
-    return [
-        [winget, *common, "--id", _WINGET_LIBREOFFICE],
-        [winget, *common, "--id", _WINGET_FFMPEG],
-    ]
+    cmds: list[list[str]] = []
+    if "libreoffice" in wanted:
+        cmds.append([winget, *common, "--id", _WINGET_LIBREOFFICE])
+    if "ffmpeg" in wanted:
+        cmds.append([winget, *common, "--id", _WINGET_FFMPEG])
+    return cmds
 
 
-def windows_manual_hint() -> str:
-    return (
-        f"winget install -e --id {_WINGET_LIBREOFFICE}\n"
-        f"winget install -e --id {_WINGET_FFMPEG}"
-    )
+def windows_manual_hint(packages: Iterable[str] | None = None) -> str:
+    wanted = _normalize_packages(packages)
+    lines: list[str] = []
+    if "libreoffice" in wanted:
+        lines.append(f"winget install -e --id {_WINGET_LIBREOFFICE}")
+    if "ffmpeg" in wanted:
+        lines.append(f"winget install -e --id {_WINGET_FFMPEG}")
+    return "\n".join(lines)
 
 
 def install_recommended_engines() -> EngineSetupResult:
-    """Run the platform package manager to install LibreOffice + FFmpeg."""
+    """Install both LibreOffice and FFmpeg (Settings bulk action)."""
+    return install_engines(("ffmpeg", "libreoffice"))
+
+
+def install_engines(packages: Iterable[str]) -> EngineSetupResult:
+    """Install selected engines via apt (Linux) or winget (Windows)."""
+    wanted = _normalize_packages(packages)
     if sys.platform.startswith("linux"):
-        return _install_linux()
+        return _install_linux(wanted)
     if sys.platform.startswith("win"):
-        return _install_windows()
+        return _install_windows(wanted)
     return EngineSetupResult(
         ok=False,
         message="Automatic install is only supported on Ubuntu/Linux and Windows.",
         command_hint=(
-            "Install LibreOffice and FFmpeg with your system package manager, "
+            "Install LibreOffice and/or FFmpeg with your system package manager, "
             "then use Settings → Re-check tools."
         ),
     )
 
 
-def _install_linux() -> EngineSetupResult:
-    hint = linux_manual_hint()
+def _install_linux(wanted: frozenset[str]) -> EngineSetupResult:
+    hint = linux_manual_hint(wanted)
     if not shutil.which("apt-get") and not shutil.which("apt"):
         return EngineSetupResult(
             ok=False,
             message="Could not find apt-get on this system.",
             command_hint=hint,
         )
-    cmd = linux_install_command()
+    cmd = linux_install_command(wanted)
     log.info("Installing optional engines via: %s", " ".join(cmd))
     try:
         proc = run_capture(cmd, timeout=_INSTALL_TIMEOUT_SECONDS)
@@ -125,7 +160,6 @@ def _install_linux() -> EngineSetupResult:
 
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()[:800]
-        # No pkexec / cancelled auth — give the manual command.
         if not shutil.which("pkexec") or "auth" in err.lower() or proc.returncode in {
             126,
             127,
@@ -144,19 +178,22 @@ def _install_linux() -> EngineSetupResult:
         )
 
     get_dependency_service().refresh(probe_versions=True)
-    return _result_after_refresh(hint)
+    return _result_after_refresh(hint, wanted)
 
 
-def _install_windows() -> EngineSetupResult:
-    hint = windows_manual_hint()
+def _install_windows(wanted: frozenset[str]) -> EngineSetupResult:
+    hint = windows_manual_hint(wanted)
     if not shutil.which("winget"):
         return EngineSetupResult(
             ok=False,
-            message="winget was not found. Install LibreOffice and FFmpeg manually, then Re-check tools.",
+            message=(
+                "winget was not found. Install the App Installer from Microsoft Store, "
+                "then retry — or install FFmpeg/LibreOffice manually."
+            ),
             command_hint=hint,
         )
     details: list[str] = []
-    for cmd in windows_winget_commands():
+    for cmd in windows_winget_commands(wanted):
         log.info("Installing via winget: %s", " ".join(cmd))
         try:
             proc = run_capture(cmd, timeout=_INSTALL_TIMEOUT_SECONDS)
@@ -176,11 +213,10 @@ def _install_windows() -> EngineSetupResult:
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or "").strip()[:800]
             details.append(err)
-            # Continue to next package; report overall status after refresh.
             log.warning("winget failed (%s): %s", cmd[-1], err[:200])
 
     get_dependency_service().refresh(probe_versions=True)
-    result = _result_after_refresh(hint)
+    result = _result_after_refresh(hint, wanted)
     if not result.ok and details:
         return EngineSetupResult(
             ok=False,
@@ -191,16 +227,15 @@ def _install_windows() -> EngineSetupResult:
     return result
 
 
-def _result_after_refresh(hint: str) -> EngineSetupResult:
-    """Confirm binaries exist and respond to --version / -version before success."""
+def _result_after_refresh(hint: str, wanted: frozenset[str]) -> EngineSetupResult:
+    """Confirm requested binaries exist after install."""
     svc = get_dependency_service()
     lo = svc.libreoffice.available
     ff = svc.ffmpeg.available
     lo_ver = svc.libreoffice.version
     ff_ver = svc.ffmpeg.version
 
-    # Path present but version probe failed (e.g. broken Snap confinement).
-    if lo and not lo_ver:
+    if "libreoffice" in wanted and lo and not lo_ver:
         return EngineSetupResult(
             ok=False,
             message=(
@@ -209,7 +244,7 @@ def _result_after_refresh(hint: str) -> EngineSetupResult:
             ),
             command_hint=hint,
         )
-    if ff and not ff_ver:
+    if "ffmpeg" in wanted and ff and not ff_ver:
         return EngineSetupResult(
             ok=False,
             message=(
@@ -219,24 +254,25 @@ def _result_after_refresh(hint: str) -> EngineSetupResult:
             command_hint=hint,
         )
 
-    if lo and ff:
+    missing: list[str] = []
+    ready: list[str] = []
+    if "libreoffice" in wanted:
+        if lo and lo_ver:
+            ready.append(f"LibreOffice ({lo_ver})")
+        else:
+            missing.append("LibreOffice")
+    if "ffmpeg" in wanted:
+        if ff and ff_ver:
+            ready.append(f"FFmpeg ({ff_ver})")
+        else:
+            missing.append("FFmpeg")
+
+    if not missing:
         return EngineSetupResult(
             ok=True,
-            message=(
-                "LibreOffice and FFmpeg are ready.\n"
-                f"LibreOffice: {lo_ver}\n"
-                f"FFmpeg: {ff_ver}"
-            ),
+            message="Ready:\n" + "\n".join(ready),
         )
-    parts: list[str] = []
-    if lo:
-        parts.append(f"LibreOffice found ({lo_ver})")
-    else:
-        parts.append("LibreOffice still missing")
-    if ff:
-        parts.append(f"FFmpeg found ({ff_ver})")
-    else:
-        parts.append("FFmpeg still missing")
+    parts = ready + [f"{name} still missing" for name in missing]
     return EngineSetupResult(
         ok=False,
         message="Install finished, but some tools are still missing: "

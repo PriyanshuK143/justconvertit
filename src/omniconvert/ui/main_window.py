@@ -318,7 +318,11 @@ class MainWindow(QWidget):
             QTimer.singleShot(0, self._maybe_prompt_engines)
 
     def _maybe_prompt_engines(self) -> None:
+        # Windows: never nag at launch — install tools only when a conversion needs them.
         if not needs_engine_setup(engines_setup_done=self.settings.engines_setup_done):
+            if sys.platform.startswith("win") and not self.settings.engines_setup_done:
+                self.settings.engines_setup_done = True
+                self.settings_store.save(self.settings)
             return
         dlg = FirstRunEnginesDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -551,7 +555,11 @@ class MainWindow(QWidget):
         self._output_dir = self._source_path.parent
 
         try:
-            ops = self.registry.available_operations_for(detected.format_id)
+            # Include ops that need FFmpeg/LibreOffice even if not installed yet,
+            # so choosing them can offer a one-click winget/apt install.
+            ops = self.registry.available_operations_for(
+                detected.format_id, include_unavailable=True
+            )
         except Exception as exc:  # noqa: BLE001
             log.exception("registry lookup failed: %s", exc)
             ops = []
@@ -607,6 +615,8 @@ class MainWindow(QWidget):
             return
 
         self._selected_op = op
+        if not self._ensure_engines_for_operation(op):
+            return
         settings = self._default_settings(op)
 
         # Merge+ pad: pick additional PDFs then save once.
@@ -696,6 +706,56 @@ class MainWindow(QWidget):
         for spec in op.settings:
             values.setdefault(spec.key, spec.default)
         return values
+
+    def _ensure_engines_for_operation(self, op: ConversionOperation) -> bool:
+        """If the op needs FFmpeg/LibreOffice, offer winget/apt install on demand."""
+        deps = get_dependency_service()
+        deps.refresh(probe_versions=False)
+        requires = set(op.requires_external or ())
+        needed: list[str] = []
+        if "ffmpeg" in requires and not deps.ffmpeg.available:
+            needed.append("ffmpeg")
+        if "libreoffice" in requires and not deps.libreoffice.available:
+            needed.append("libreoffice")
+        if not needed:
+            return True
+
+        labels = []
+        if "ffmpeg" in needed:
+            labels.append("FFmpeg (audio/video)")
+        if "libreoffice" in needed:
+            labels.append("LibreOffice (Office ↔ PDF)")
+        pretty = " and ".join(labels)
+        manager = "winget" if sys.platform.startswith("win") else "apt"
+        reply = QMessageBox.question(
+            self,
+            "Optional tool needed",
+            f"This conversion needs {pretty}.\n\n"
+            f"Install now with {manager}? (internet + approval once)\n"
+            "You can also skip and pick another format.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            self._set_status("Install skipped — pick another format", "info")
+            return False
+
+        result = run_engine_install_with_ui(self, packages=tuple(needed))
+        show_engine_install_result(self, result)
+        deps.refresh(probe_versions=True)
+        still = []
+        if "ffmpeg" in needed and not deps.ffmpeg.available:
+            still.append("FFmpeg")
+        if "libreoffice" in needed and not deps.libreoffice.available:
+            still.append("LibreOffice")
+        if still:
+            self._set_status(
+                f"Still missing {', '.join(still)} — try Settings",
+                "err",
+            )
+            return False
+        self._set_status("Tool ready — continuing", "ok")
+        return True
 
     def _show_more_actions_menu(self) -> None:
         """Overflow conversions that did not fit on the orb."""
@@ -1028,7 +1088,9 @@ class MainWindow(QWidget):
                 self._output_dir = Path(self.settings.default_output_dir)
             # Refresh wheel pads if a file is loaded (optional engines may appear/disappear).
             if self.detected is not None:
-                ops = self.registry.available_operations_for(self.detected.format_id)
+                ops = self.registry.available_operations_for(
+                    self.detected.format_id, include_unavailable=True
+                )
                 wheel_ops, overflow = split_wheel_actions(ops)
                 self._current_ops = ops
                 self._overflow_ops = overflow

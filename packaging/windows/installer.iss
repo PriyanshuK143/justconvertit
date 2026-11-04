@@ -64,8 +64,10 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{a
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
-[Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch JustConvertIt"; Flags: nowait postinstall skipifsilent unchecked
+; Do NOT auto-launch after install.
+; Unsigned builds are often blocked by Windows Application Control / Smart App Control
+; (CreateProcess code 4551). Launching from Setup then shows a scary "Setup" error
+; even though files installed fine. Users start the app from the Start Menu instead.
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
