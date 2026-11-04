@@ -22,11 +22,22 @@ if (-not (Test-Path $exe)) {
   throw "PyInstaller did not produce $exe"
 }
 
-Write-Host "==> Headless smoke convert (no GUI)"
+Write-Host "==> Headless smoke convert (wait for GUI subsystem EXE)"
 $in = Join-Path $env:TEMP "justconvertit-smoke.png"
 $out = Join-Path $env:TEMP "justconvertit-smoke.jpg"
+if (Test-Path $out) { Remove-Item -Force $out }
 python -c "from PIL import Image; Image.new('RGB',(8,8),(1,2,3)).save(r'$in')"
-& $exe --smoke-convert image.png_to_jpeg $in $out
+# Windowed EXEs return early under `&` — always Start-Process -Wait.
+$p = Start-Process -FilePath $exe `
+  -ArgumentList @("--smoke-convert", "image.png_to_jpeg", $in, $out) `
+  -Wait -PassThru -NoNewWindow
+if ($null -ne $p.ExitCode -and $p.ExitCode -ne 0) {
+  throw "smoke-convert exit code $($p.ExitCode)"
+}
+$deadline = (Get-Date).AddSeconds(45)
+while (-not (Test-Path $out) -and (Get-Date) -lt $deadline) {
+  Start-Sleep -Milliseconds 250
+}
 if (-not (Test-Path $out)) {
   throw "Windows smoke conversion failed — refusing to build installer"
 }

@@ -1,0 +1,88 @@
+# Build JustConvertIt-*-Setup.exe on a real Windows runner.
+# Use this from Ubuntu:  gh workflow run release-windows.yml
+# Does not build Linux packages (those stay local via scripts/build_linux.sh).
+
+name: Release Windows Setup
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  windows-setup:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Install Python deps
+        shell: pwsh
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements-release.txt
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Quick tests (Windows)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytestqt -q --tb=line
+
+      - name: PyInstaller + smoke + Inno Setup
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean packaging/windows/omniconvert.spec
+          $exe = ".\dist\justconvertit\justconvertit.exe"
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
+
+          $in = Join-Path $env:TEMP "jci-in.png"
+          $out = Join-Path $env:TEMP "jci-out.jpg"
+          if (Test-Path $out) { Remove-Item -Force $out }
+          python -c "from PIL import Image; Image.new('RGB',(8,8),(1,2,3)).save(r'$in')"
+
+          # Windowed (GUI) EXEs return early under PowerShell & — must Wait.
+          $p = Start-Process -FilePath $exe `
+            -ArgumentList @("--smoke-convert", "image.png_to_jpeg", $in, $out) `
+            -Wait -PassThru -NoNewWindow
+          if ($null -ne $p.ExitCode -and $p.ExitCode -ne 0) {
+            throw "smoke-convert exit code $($p.ExitCode)"
+          }
+          $deadline = (Get-Date).AddSeconds(45)
+          while (-not (Test-Path $out) -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 250
+          }
+          if (-not (Test-Path $out)) { throw "smoke output missing: $out" }
+          Write-Host "Smoke OK: $out size=$((Get-Item $out).Length)"
+
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "${env:ProgramFiles}\Inno Setup 6\ISCC.exe" }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found" }
+          & $iscc packaging\windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed ($LASTEXITCODE)" }
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -Force packaging\windows\Output\JustConvertIt-0.1.0-Setup.exe dist\JustConvertIt-0.1.0-Setup.exe
+          Get-FileHash dist\JustConvertIt-0.1.0-Setup.exe -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  JustConvertIt-0.1.0-Setup.exe" } |
+            Set-Content -Encoding ascii dist\JustConvertIt-0.1.0-Setup.sha256
+          Get-Content dist\JustConvertIt-0.1.0-Setup.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JustConvertIt-windows-setup
+          path: |
+            dist/JustConvertIt-0.1.0-Setup.exe
+            dist/JustConvertIt-0.1.0-Setup.sha256
+          if-no-files-found: error

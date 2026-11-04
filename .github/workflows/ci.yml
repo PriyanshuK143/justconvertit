@@ -88,10 +88,23 @@ jobs:
           pip install -e .
           pip install pyinstaller
           pyinstaller --noconfirm --clean packaging/windows/omniconvert.spec
+          $exe = ".\dist\justconvertit\justconvertit.exe"
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
           $in = Join-Path $env:TEMP "oc-in.png"
           $out = Join-Path $env:TEMP "oc-out.jpg"
+          if (Test-Path $out) { Remove-Item -Force $out }
           python -c "from PIL import Image; Image.new('RGB',(8,8),(1,2,3)).save(r'$in')"
-          .\dist\justconvertit\justconvertit.exe --smoke-convert image.png_to_jpeg $in $out
+          # GUI subsystem EXE must be Wait'ed; `&` returns too early on Windows.
+          $p = Start-Process -FilePath $exe `
+            -ArgumentList @("--smoke-convert", "image.png_to_jpeg", $in, $out) `
+            -Wait -PassThru -NoNewWindow
+          if ($null -ne $p.ExitCode -and $p.ExitCode -ne 0) {
+            throw "smoke-convert exit code $($p.ExitCode)"
+          }
+          $deadline = (Get-Date).AddSeconds(45)
+          while (-not (Test-Path $out) -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 250
+          }
           if (-not (Test-Path $out)) { throw "smoke output missing" }
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { $iscc = "${env:ProgramFiles}\Inno Setup 6\ISCC.exe" }
