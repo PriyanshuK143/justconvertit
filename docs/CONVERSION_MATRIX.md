@@ -9,23 +9,23 @@ These use free libraries that ship with the app. No LibreOffice or FFmpeg requir
 
 ### Images (Pillow)
 
-| From ↓ / To → | PNG | JPEG | WEBP | BMP | TIFF | PDF | No BG (PNG) |
-|---------------|-----|------|------|-----|------|-----|-------------|
-| PNG | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| JPEG | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| WEBP | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ |
-| BMP | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| TIFF | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ |
+| From ↓ / To → | PNG | JPEG | WEBP | PDF | Crop → PNG |
+|---------------|-----|------|------|-----|------------|
+| PNG | — | ✓ | ✓ | ✓ | ✓ |
+| JPEG | ✓ | — | ✓ | ✓ | ✓ |
+| WEBP | ✓ | ✓ | — | ✓ | ✓ |
+| BMP | ✓ | ✓ | ✓ | ✓ | ✓ |
+| TIFF | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-**No BG:** removes a flat backdrop (corner-sampled) into a transparent PNG. Offline; works best on solid backgrounds, not complex photo cutouts.
+BMP/TIFF can be **opened** and converted to PNG/JPEG/WEBP; there is no export to BMP or TIFF, and no resize / remove-background actions.
 
 ### Text & tables
 
 | From | To |
 |------|-----|
-| TXT | PDF, DOCX, MD |
+| TXT | MD, PDF, DOCX |
 | MD | TXT |
-| HTML | TXT |
+| HTML | TXT, MD, PDF, DOCX |
 | JSON | CSV, XLSX, PDF, Pretty JSON |
 | CSV | JSON, XLSX |
 | XLSX | CSV, JSON |
@@ -42,6 +42,7 @@ columnar object of flat arrays, or a single flat object. Nested objects/arrays a
 | PDF | PNG | Render page 1 |
 | PDF | JPEG | Render page 1 |
 | PDF | Pages ZIP | Every page as PNG inside a ZIP (capped page/pixel budget) |
+| PDF | Images ZIP | Embedded XObject images (not OCR; scans → use Pages ZIP) |
 | PDF | PDF (Rotate) | 90 / 180 / 270° all pages |
 | PDF | PDF (Compress) | Best-effort content-stream rewrite |
 | Image | PDF | Single-page PDF |
@@ -51,11 +52,15 @@ columnar object of flat arrays, or a single flat object. Nested objects/arrays a
 
 | From | To | Notes |
 |------|-----|-------|
-| DOCX | TXT | Paragraphs + tables |
-| DOCX | PDF (text) | Text layout via ReportLab |
+| DOCX | TXT | Document order: headings, paragraphs, tables |
+| DOCX | MD | Headings + Markdown tables (portable) |
+| DOCX | PDF | Headings, tables, embedded images via ReportLab |
+| DOCX | Images ZIP | Extract embedded pictures |
 | TXT | DOCX | Simple Word wrap |
 | PPTX | TXT | Slide text |
 | PPTX | PDF (text) | Text layout via ReportLab |
+
+PDF **Images ZIP** extracts embedded pictures (not full-page screenshots). For scans or drawn pages, use **Pages ZIP** / page PNG.
 
 ## Optional system engines (not bundled)
 

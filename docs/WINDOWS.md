@@ -71,5 +71,5 @@ On a Windows 10/11 PC **without** Python installed:
 ## App identity
 
 - Product name: justconvertit
-- Icon: `packaging/windows/omniconvert.ico`
+- Icon: `packaging/windows/omniconvert.ico` (regenerate from brand art with `python scripts/generate_icons.py`)
 - AppUserModelID: `justconvertit.Desktop.1`

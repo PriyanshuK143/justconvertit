@@ -5,12 +5,12 @@ from omniconvert.core.formats import FormatId
 from omniconvert.ui.wheel_actions import MAX_WHEEL_ACTIONS, wheel_operations
 
 
-def _op(oid: str, label: str) -> ConversionOperation:
+def _op(oid: str, label: str, target: FormatId = FormatId.JPEG) -> ConversionOperation:
     return ConversionOperation(
         operation_id=oid,
         label=label,
         source_formats=frozenset({FormatId.PNG}),
-        target_format=FormatId.JPEG,
+        target_format=target,
         wheel_label=label,
     )
 
@@ -20,20 +20,13 @@ def test_wheel_keeps_small_lists_intact() -> None:
     assert wheel_operations(ops) == ops
 
 
-def test_wheel_prioritizes_and_caps_without_more() -> None:
+def test_wheel_prioritizes_common_formats() -> None:
     ops = [
-        _op("image.png_to_bmp", "BMP"),
-        _op("image.png_to_tiff", "TIFF"),
-        _op("image.remove_bg", "No BG"),
-        _op("image.png_to_jpeg", "JPEG"),
-        _op("image.png_to_webp", "WEBP"),
         _op("image.crop", "Crop"),
-        _op("image.resize", "Resize"),
-        _op("pdf.image_png_to_pdf", "PDF"),
-        _op("image.png_to_png", "PNG"),
+        _op("image.png_to_webp", "WEBP", FormatId.WEBP),
+        _op("image.png_to_jpeg", "JPEG"),
+        _op("pdf.image_png_to_pdf", "PDF", FormatId.PDF),
+        _op("text.txt_to_md", "MD", FormatId.MD),
     ]
     wheel = wheel_operations(ops, max_visible=MAX_WHEEL_ACTIONS)
-    assert len(wheel) == MAX_WHEEL_ACTIONS
-    assert all(o.operation_id != "ui.more_actions" for o in wheel)
-    assert wheel[0].segment_label == "JPEG"
-    assert {o.segment_label for o in wheel} >= {"JPEG", "WEBP", "Crop", "Resize", "PDF"}
+    assert [o.segment_label for o in wheel[:3]] == ["JPEG", "WEBP", "MD"]

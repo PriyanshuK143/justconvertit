@@ -5,7 +5,13 @@ a = Analysis(
     ['src/omniconvert/main.py'],
     pathex=['src'],
     binaries=[],
-    datas=[('docs/THIRD_PARTY_NOTICES.md', 'docs'), ('docs/PRIVACY.md', 'docs'), ('LICENSE', '.'), ('src/omniconvert/resources/omniconvert.png', 'omniconvert/resources')],
+    datas=[
+        ('docs/THIRD_PARTY_NOTICES.md', 'docs'),
+        ('docs/PRIVACY.md', 'docs'),
+        ('LICENSE', '.'),
+        ('src/omniconvert/resources/omniconvert.png', 'omniconvert/resources'),
+        ('src/omniconvert/resources/omniconvert.ico', 'omniconvert/resources'),
+    ],
     hiddenimports=['omniconvert.converters.image_pillow', 'omniconvert.converters.tabular', 'omniconvert.converters.text_ops', 'omniconvert.converters.pdf_ops', 'omniconvert.converters.office_pure', 'omniconvert.converters.office_libreoffice', 'omniconvert.converters.media_ffmpeg', 'omniconvert.converters.svg_inkscape'],
     hookspath=[],
     hooksconfig={},
@@ -32,6 +38,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='src/omniconvert/resources/omniconvert.png',
 )
 coll = COLLECT(
     exe,

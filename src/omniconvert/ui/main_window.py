@@ -65,7 +65,8 @@ log = logging.getLogger("omniconvert.ui")
 # Slightly larger on Windows so action chips stay readable under HiDPI scaling.
 ORB_SIZE = 500 if sys.platform.startswith("win") else 460
 # Launch shows only the center button; expands to ORB_SIZE after a file is loaded.
-HUB_SIZE = 240
+# Large enough for brand + two-line "Click or drop a file" inside the disc.
+HUB_SIZE = 280
 
 
 class _OptionsPopup(QDialog):

@@ -24,10 +24,12 @@ pyinstaller \
   --disable-windowed-traceback \
   --name justconvertit \
   --paths src \
+  --icon src/omniconvert/resources/omniconvert.png \
   --add-data "docs/THIRD_PARTY_NOTICES.md:docs" \
   --add-data "docs/PRIVACY.md:docs" \
   --add-data "LICENSE:." \
   --add-data "src/omniconvert/resources/omniconvert.png:omniconvert/resources" \
+  --add-data "src/omniconvert/resources/omniconvert.ico:omniconvert/resources" \
   --hidden-import omniconvert.converters.image_pillow \
   --hidden-import omniconvert.converters.tabular \
   --hidden-import omniconvert.converters.text_ops \
@@ -60,6 +62,9 @@ cp -f docs/INSTALL.md "$APP_DIR/INSTALL.md"
 cp -f docs/PRIVACY.md "$APP_DIR/PRIVACY.md"
 cp -f docs/THIRD_PARTY_NOTICES.md "$APP_DIR/THIRD_PARTY_NOTICES.md"
 cp -f LICENSE "$APP_DIR/LICENSE"
+# Brand icon for zip/install.sh desktop entry (Icon=justconvertit).
+mkdir -p "$APP_DIR/icons"
+cp -f src/omniconvert/resources/omniconvert.png "$APP_DIR/icons/justconvertit.png"
 
 echo
 echo "Built standalone app folder: $APP_DIR/justconvertit"

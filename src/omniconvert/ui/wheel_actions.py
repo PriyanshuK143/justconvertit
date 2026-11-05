@@ -19,22 +19,24 @@ def _rank(op: ConversionOperation) -> tuple[int, str, str]:
         return (1, label, oid)
     if oid.endswith("_to_webp") or label == "webp":
         return (2, label, oid)
-    if "to_pdf" in oid or label == "pdf":
+    if oid.endswith("_to_md") or label == "md":
         return (3, label, oid)
-    if "crop" in oid or label == "crop":
+    if oid.endswith("_to_txt") or label == "txt":
         return (4, label, oid)
-    if "resize" in oid or label == "resize":
+    if "to_pdf" in oid or label == "pdf":
         return (5, label, oid)
-    if oid.endswith("_to_mp3") or "extract" in oid:
+    if oid.endswith("_to_docx") or label == "docx":
         return (6, label, oid)
-    if "compress" in oid or label == "compress":
+    if "images" in oid or label == "images":
         return (7, label, oid)
-    if "remove_bg" in oid or label in {"no bg", "nobg"}:
-        return (40, label, oid)
-    if oid.endswith("_to_bmp") or label == "bmp":
-        return (30, label, oid)
-    if oid.endswith("_to_tiff") or label == "tiff":
-        return (31, label, oid)
+    if "crop" in oid or label == "crop":
+        return (8, label, oid)
+    if oid.endswith("_to_mp3") or "extract" in oid:
+        return (9, label, oid)
+    if "compress" in oid or label == "compress":
+        return (10, label, oid)
+    if "pages" in oid or label == "pages zip":
+        return (11, label, oid)
     return (20, label, oid)
 
 

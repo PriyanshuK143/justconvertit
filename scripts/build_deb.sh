@@ -41,7 +41,6 @@ mkdir -p \
   "$STAGE/opt/${PKG_NAME}" \
   "$STAGE/usr/bin" \
   "$STAGE/usr/share/applications" \
-  "$STAGE/usr/share/icons/hicolor/256x256/apps" \
   "$STAGE/usr/share/doc/${PKG_NAME}"
 
 # Application payload
@@ -55,10 +54,25 @@ rm -f \
 rm -rf "$STAGE/opt/${PKG_NAME}/icons"
 chmod +x "$STAGE/opt/${PKG_NAME}/${PKG_NAME}"
 
-# Menu entry + icon + PATH symlink
-ICON_SRC="src/omniconvert/resources/omniconvert.png"
-if [[ -f "$ICON_SRC" ]]; then
-  install -m 0644 "$ICON_SRC" "$STAGE/usr/share/icons/hicolor/256x256/apps/${PKG_NAME}.png"
+# Menu / dock icons (Freedesktop hicolor) + PATH symlink
+ICON_INSTALLED=0
+for size in 48 128 256 512; do
+  src="src/omniconvert/resources/hicolor/${size}x${size}/apps/${PKG_NAME}.png"
+  if [[ ! -f "$src" ]]; then
+    # Fallback: single high-res PNG scaled into the 256 slot only.
+    if [[ "$size" == "256" && -f src/omniconvert/resources/omniconvert.png ]]; then
+      src="src/omniconvert/resources/omniconvert.png"
+    else
+      continue
+    fi
+  fi
+  dest_dir="$STAGE/usr/share/icons/hicolor/${size}x${size}/apps"
+  mkdir -p "$dest_dir"
+  install -m 0644 "$src" "$dest_dir/${PKG_NAME}.png"
+  ICON_INSTALLED=1
+done
+if [[ "$ICON_INSTALLED" -eq 0 ]]; then
+  echo "warning: no app icons found under src/omniconvert/resources/" >&2
 fi
 
 cat > "$STAGE/usr/share/applications/${PKG_NAME}.desktop" <<EOF

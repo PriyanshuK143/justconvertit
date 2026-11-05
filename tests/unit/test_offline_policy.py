@@ -71,7 +71,9 @@ def test_core_ops_available_without_optional_engines(registry: ConversionRegistr
 
     docx_ops = {op.operation_id for op in registry.available_operations_for(FormatId.DOCX)}
     assert "office.docx_to_txt" in docx_ops
-    # Always a DOCX→PDF path: LibreOffice when installed, else portable text PDF.
+    assert "office.docx_to_md" in docx_ops
+    assert "office.docx_images_zip" in docx_ops
+    # Always a DOCX→PDF path: LibreOffice when installed, else portable PDF.
     assert "office.docx_to_pdf_text" in docx_ops or "office.docx_to_pdf" in docx_ops
 
 

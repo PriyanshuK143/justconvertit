@@ -85,6 +85,86 @@ class _HTMLTextExtractor(HTMLParser):
         return raw.strip() + ("\n" if raw.strip() else "")
 
 
+class _HTMLMarkdownExtractor(HTMLParser):
+    """Best-effort HTML → Markdown (headings, lists, links, emphasis)."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._skip_depth = 0
+        self._link_href: list[str | None] = []
+        self._link_text: list[list[str]] = []
+        self._emphasis: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"script", "style", "noscript"}:
+            self._skip_depth += 1
+            return
+        if self._skip_depth:
+            return
+        attr = {k: (v or "") for k, v in attrs}
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            level = int(tag[1])
+            self._parts.append(f"\n\n{'#' * level} ")
+        elif tag in {"p", "div"}:
+            self._parts.append("\n\n")
+        elif tag == "br":
+            self._parts.append("\n")
+        elif tag == "li":
+            self._parts.append("\n- ")
+        elif tag in {"ul", "ol"}:
+            self._parts.append("\n")
+        elif tag == "a":
+            self._link_href.append(attr.get("href") or "")
+            self._link_text.append([])
+        elif tag in {"strong", "b"}:
+            self._emphasis.append("**")
+            self._parts.append("**")
+        elif tag in {"em", "i"}:
+            self._emphasis.append("*")
+            self._parts.append("*")
+        elif tag == "code":
+            self._emphasis.append("`")
+            self._parts.append("`")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style", "noscript"} and self._skip_depth:
+            self._skip_depth -= 1
+            return
+        if self._skip_depth:
+            return
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6", "p", "div", "li"}:
+            self._parts.append("\n")
+        elif tag == "a" and self._link_href:
+            href = self._link_href.pop()
+            text_bits = self._link_text.pop()
+            label = " ".join(text_bits).strip() or href
+            if href:
+                self._parts.append(f"[{label}]({href})")
+            else:
+                self._parts.append(label)
+        elif tag in {"strong", "b", "em", "i", "code"} and self._emphasis:
+            self._parts.append(self._emphasis.pop())
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        text = re.sub(r"\s+", " ", data)
+        if not text.strip() and text != " ":
+            return
+        if self._link_text:
+            self._link_text[-1].append(text.strip() if text.strip() else text)
+            return
+        if text:
+            self._parts.append(text)
+
+    def markdown(self) -> str:
+        raw = "".join(self._parts)
+        raw = re.sub(r"[ \t]+\n", "\n", raw)
+        raw = re.sub(r"\n{3,}", "\n\n", raw)
+        return raw.strip() + ("\n" if raw.strip() else "")
+
+
 def html_to_plain(html: str) -> str:
     parser = _HTMLTextExtractor()
     try:
@@ -93,6 +173,26 @@ def html_to_plain(html: str) -> str:
     except Exception as exc:  # noqa: BLE001 — html.parser can raise varied errors
         raise ValidationError("Could not parse HTML.", detail=str(exc)) from exc
     return parser.text()
+
+
+def html_to_markdown(html: str) -> str:
+    parser = _HTMLMarkdownExtractor()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception as exc:  # noqa: BLE001 — html.parser can raise varied errors
+        raise ValidationError("Could not parse HTML.", detail=str(exc)) from exc
+    return parser.markdown()
+
+
+def _text_to_docx(text: str, destination: Path) -> None:
+    from docx import Document
+
+    doc = Document()
+    for para in text.splitlines() or [""]:
+        doc.add_paragraph(para)
+    with AtomicWriter(destination) as tmp:
+        doc.save(str(tmp))
 
 
 def markdown_to_plain(text: str) -> str:
@@ -193,6 +293,7 @@ class TextOpsConverter(Converter):
                 source_formats=frozenset({FormatId.MD}),
                 target_format=FormatId.TXT,
                 description="Strip common Markdown markup into plain text.",
+                wheel_label="TXT",
                 tested=True,
             ),
             ConversionOperation(
@@ -201,6 +302,7 @@ class TextOpsConverter(Converter):
                 source_formats=frozenset({FormatId.TXT}),
                 target_format=FormatId.MD,
                 description="Save plain text as a Markdown (.md) file.",
+                wheel_label="MD",
                 tested=True,
             ),
             ConversionOperation(
@@ -209,6 +311,37 @@ class TextOpsConverter(Converter):
                 source_formats=frozenset({FormatId.HTML}),
                 target_format=FormatId.TXT,
                 description="Extract visible text from HTML (scripts/styles removed).",
+                wheel_label="TXT",
+                tested=True,
+            ),
+            ConversionOperation(
+                operation_id="text.html_to_md",
+                label="HTML → MD",
+                source_formats=frozenset({FormatId.HTML}),
+                target_format=FormatId.MD,
+                description=(
+                    "Convert HTML to Markdown (headings, lists, links, emphasis). "
+                    "Scripts and styles are dropped."
+                ),
+                wheel_label="MD",
+                tested=True,
+            ),
+            ConversionOperation(
+                operation_id="text.html_to_pdf",
+                label="HTML → PDF",
+                source_formats=frozenset({FormatId.HTML}),
+                target_format=FormatId.PDF,
+                description="Extract text from HTML into a simple portable PDF.",
+                wheel_label="PDF",
+                tested=True,
+            ),
+            ConversionOperation(
+                operation_id="text.html_to_docx",
+                label="HTML → DOCX",
+                source_formats=frozenset({FormatId.HTML}),
+                target_format=FormatId.DOCX,
+                description="Extract text from HTML into a simple Word document.",
+                wheel_label="DOCX",
                 tested=True,
             ),
         ]
@@ -269,6 +402,26 @@ class TextOpsConverter(Converter):
                 with AtomicWriter(destination) as tmp:
                     _write_text(Path(tmp), text)
                 msg = "Extracted text from HTML."
+            elif operation_id == "text.html_to_md":
+                text = html_to_markdown(_read_text(source))
+                check_cancelled(is_cancelled)
+                with AtomicWriter(destination) as tmp:
+                    _write_text(Path(tmp), text)
+                msg = "HTML converted to Markdown."
+            elif operation_id == "text.html_to_pdf":
+                text = html_to_plain(_read_text(source))
+                check_cancelled(is_cancelled)
+                if progress:
+                    progress(0.5, "Writing PDF…")
+                _text_to_pdf(text, destination)
+                msg = "PDF created from HTML text."
+            elif operation_id == "text.html_to_docx":
+                text = html_to_plain(_read_text(source))
+                check_cancelled(is_cancelled)
+                if progress:
+                    progress(0.5, "Writing DOCX…")
+                _text_to_docx(text, destination)
+                msg = "DOCX created from HTML text."
             else:
                 raise ConversionFailedError("Unknown text operation.")
 

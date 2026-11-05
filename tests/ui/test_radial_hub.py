@@ -132,10 +132,37 @@ def test_move_rim_includes_air_gap_with_file(qapp) -> None:
     wheel.close()
 
 
+def test_wrap_words_keeps_hint_readable(qapp) -> None:
+    wheel = RadialWheel()
+    from PySide6.QtGui import QFont, QFontMetrics
+
+    fm = QFontMetrics(QFont())
+    # Force a narrow width so the phrase must break on spaces.
+    lines = wheel._wrap_words("Click or drop a file", fm, max_width=80, max_lines=2)
+    assert len(lines) >= 1
+    joined = " ".join(lines)
+    assert "Click" in joined
+    assert "…" not in joined and "..." not in joined
+    # No mid-word mutilation like "Click or…p a file".
+    assert not any("or…" in ln or "or..." in ln for ln in lines)
+    wheel.close()
+
+
+def test_empty_hub_hint_paints_without_ellipsis(qapp) -> None:
+    wheel = RadialWheel()
+    wheel.resize(QSize(280, 280))
+    wheel.set_has_file(False)
+    wheel.set_center_text("justconvertit", "Click or drop a file")
+    # Paint path must stay inside the hub (no crash / no layout assert).
+    img = wheel.grab()
+    assert not img.isNull()
+    wheel.close()
+
+
 def test_status_banner_paints_with_pads(qapp) -> None:
     wheel = RadialWheel()
     wheel.resize(QSize(440, 440))
-    wheel.set_operations([_fake_op("TIFF", "a"), _fake_op("No BG", "b")])
+    wheel.set_operations([_fake_op("WEBP", "a"), _fake_op("Crop", "b")])
     wheel.set_has_file(True)
     wheel.set_banner("Done · photo_converted.png", "#0f172a")
     assert wheel._banner.startswith("Done")

@@ -1,6 +1,10 @@
-# justconvertit
+<p align="center">
+  <img src="src/omniconvert/resources/omniconvert.png" alt="justconvertit" width="160" height="160" />
+</p>
 
-**Local file conversion. One floating wheel. Nothing leaves your machine.**
+<h1 align="center">justconvertit</h1>
+
+<p align="center"><strong>Local file conversion. One floating wheel. Nothing leaves your machine.</strong></p>
 
 justconvertit is a small always-on-top desktop orb: drop a file on the hub, drag toward a format pad, and get a new file next to the original. No accounts, no uploads, no telemetry.
 
@@ -32,9 +36,9 @@ Optional tools on your system (LibreOffice, FFmpeg) unlock richer Office and aud
 
 ## What it converts
 
-**Images** — PNG, JPEG, WEBP, BMP, TIFF · crop · resize · remove solid background · image → PDF  
+**Images** — PNG ↔ JPEG ↔ WEBP · open BMP/TIFF · crop · image → PDF  
 
-**Documents & text** — TXT, Markdown, HTML, JSON, CSV, XLSX · DOCX / PPTX text extract · PDF create & extract  
+**Documents & text** — TXT ↔ MD · HTML → TXT / MD / PDF / DOCX · DOCX → MD / PDF / images ZIP · JSON, CSV, XLSX · PPTX text · PDF extract / pages / images  
 
 **PDF** — text extract · page render · pages → ZIP · rotate · compress · merge  
 

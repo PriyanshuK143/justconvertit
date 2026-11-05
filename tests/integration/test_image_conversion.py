@@ -34,16 +34,25 @@ def test_jpeg_to_png(registry: ConversionRegistry, sample_jpeg: Path, tmp_path: 
         assert img.format == "PNG"
 
 
-def test_png_to_webp_bmp_tiff(registry: ConversionRegistry, sample_png: Path, tmp_path: Path) -> None:
-    for op_id, fmt in [
-        ("image.png_to_webp", "WEBP"),
-        ("image.png_to_bmp", "BMP"),
-        ("image.png_to_tiff", "TIFF"),
-    ]:
-        dest = tmp_path / f"out.{fmt.lower()}"
-        registry.convert(operation_id=op_id, source=sample_png, destination=dest, settings={})
-        with Image.open(dest) as img:
-            assert img.format == fmt
+def test_png_to_webp(registry: ConversionRegistry, sample_png: Path, tmp_path: Path) -> None:
+    dest = tmp_path / "out.webp"
+    registry.convert(
+        operation_id="image.png_to_webp",
+        source=sample_png,
+        destination=dest,
+        settings={},
+    )
+    with Image.open(dest) as img:
+        assert img.format == "WEBP"
+
+
+def test_bmp_tiff_targets_removed(registry: ConversionRegistry) -> None:
+    ids = {op.operation_id for op in registry.all_operations()}
+    assert "image.png_to_bmp" not in ids
+    assert "image.png_to_tiff" not in ids
+    assert "image.jpeg_to_tiff" not in ids
+    assert "image.resize" not in ids
+    assert "image.remove_background" not in ids
 
 
 def test_image_to_pdf(registry: ConversionRegistry, sample_png: Path, tmp_path: Path) -> None:

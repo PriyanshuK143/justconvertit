@@ -82,6 +82,19 @@ class PdfOpsConverter(Converter):
                 tested=True,
             ),
             ConversionOperation(
+                operation_id="pdf.extract_images",
+                label="PDF images → ZIP",
+                source_formats=frozenset({FormatId.PDF}),
+                target_format=FormatId.ZIP,
+                description=(
+                    "Extract embedded images from the PDF into a ZIP. "
+                    "If none are found (e.g. scans), use Pages ZIP instead."
+                ),
+                wheel_label="Images",
+                supports_batch=False,
+                tested=True,
+            ),
+            ConversionOperation(
                 operation_id="pdf.rotate",
                 label="PDF rotate",
                 source_formats=frozenset({FormatId.PDF}),
@@ -187,6 +200,8 @@ class PdfOpsConverter(Converter):
                 return self._render_page(source, destination, "JPEG", progress, is_cancelled)
             if operation_id == "pdf.pages_to_zip":
                 return self._pages_to_zip(source, destination, progress, is_cancelled)
+            if operation_id == "pdf.extract_images":
+                return self._extract_images(source, destination, progress, is_cancelled)
             if operation_id == "pdf.rotate":
                 return self._rotate(source, destination, settings, progress, is_cancelled)
             if operation_id == "pdf.compress":
@@ -316,6 +331,81 @@ class PdfOpsConverter(Converter):
         if progress:
             progress(1.0, "Done")
         return ConversionResult(destination, size, f"Packed {n} PNG pages into a ZIP.")
+
+    def _extract_images(
+        self,
+        source: Path,
+        destination: Path,
+        progress: ProgressCallback | None,
+        is_cancelled: CancelCheck | None,
+    ) -> ConversionResult:
+        """Pull embedded XObject images (not full-page screenshots)."""
+        from pypdf import PdfReader
+
+        if progress:
+            progress(0.1, "Opening PDF…")
+        reader = PdfReader(str(source))
+        images: list[tuple[str, bytes]] = []
+        index = 1
+        for page_i, page in enumerate(reader.pages):
+            check_cancelled(is_cancelled)
+            try:
+                page_images = page.images
+            except Exception:  # noqa: BLE001 — some pages lack image APIs
+                continue
+            for img in page_images:
+                check_cancelled(is_cancelled)
+                try:
+                    data = img.data
+                    name = getattr(img, "name", None) or f"image_{index}"
+                    ext = Path(str(name)).suffix.lower()
+                    if ext not in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp"}:
+                        # Infer from image object when possible
+                        image_obj = getattr(img, "image", None)
+                        if image_obj is not None:
+                            buf = io.BytesIO()
+                            fmt = (getattr(image_obj, "format", None) or "PNG").upper()
+                            if fmt == "JPEG":
+                                ext = ".jpg"
+                            elif fmt == "PNG":
+                                ext = ".png"
+                            else:
+                                ext = ".png"
+                                fmt = "PNG"
+                            if image_obj.mode not in ("RGB", "L", "RGBA"):
+                                image_obj = image_obj.convert("RGB")
+                            image_obj.save(buf, format=fmt if fmt in {"PNG", "JPEG"} else "PNG")
+                            data = buf.getvalue()
+                        else:
+                            ext = ".bin"
+                    fname = f"image_{index:03d}{ext}"
+                    if data:
+                        images.append((fname, data))
+                        index += 1
+                except Exception:  # noqa: BLE001
+                    continue
+            if progress and reader.pages:
+                progress(
+                    0.1 + 0.8 * ((page_i + 1) / max(len(reader.pages), 1)),
+                    f"Page {page_i + 1}…",
+                )
+
+        if not images:
+            raise ValidationError(
+                "No embedded images found in this PDF. "
+                "Try Pages ZIP to save each page as a picture."
+            )
+
+        with AtomicWriter(destination) as tmp:
+            with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for name, blob in images:
+                    zf.writestr(name, blob)
+        size = verify_output(destination)
+        if progress:
+            progress(1.0, "Done")
+        return ConversionResult(
+            destination, size, f"Saved {len(images)} embedded image(s) from PDF."
+        )
 
     def _image_to_pdf(
         self,

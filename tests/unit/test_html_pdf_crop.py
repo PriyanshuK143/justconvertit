@@ -29,13 +29,19 @@ def test_detect_html(tmp_path: Path) -> None:
     assert detect_file(p).format_id is FormatId.HTML
 
 
-def test_html_to_txt(registry: ConversionRegistry, tmp_path: Path) -> None:
-    src = tmp_path / "a.html"
-    src.write_text(
+def _sample_html(path: Path) -> Path:
+    path.write_text(
         "<html><head><style>x{}</style><script>alert(1)</script></head>"
-        "<body><h1>Title</h1><p>Hello <b>world</b></p></body></html>",
+        "<body><h1>Title</h1><p>Hello <b>world</b> "
+        '<a href="https://example.com">link</a></p>'
+        "<ul><li>One</li><li>Two</li></ul></body></html>",
         encoding="utf-8",
     )
+    return path
+
+
+def test_html_to_txt(registry: ConversionRegistry, tmp_path: Path) -> None:
+    src = _sample_html(tmp_path / "a.html")
     out = tmp_path / "a.txt"
     registry.convert(
         operation_id="text.html_to_txt",
@@ -49,6 +55,52 @@ def test_html_to_txt(registry: ConversionRegistry, tmp_path: Path) -> None:
     assert "world" in text
     assert "alert" not in text
     assert "<" not in text
+
+
+def test_html_to_md(registry: ConversionRegistry, tmp_path: Path) -> None:
+    src = _sample_html(tmp_path / "a.html")
+    out = tmp_path / "a.md"
+    registry.convert(
+        operation_id="text.html_to_md",
+        source=src,
+        destination=out,
+        settings={},
+    )
+    text = out.read_text(encoding="utf-8")
+    assert "# Title" in text
+    assert "**world**" in text
+    assert "[link](https://example.com)" in text
+    assert "- One" in text
+    assert "alert" not in text
+
+
+def test_html_to_pdf(registry: ConversionRegistry, tmp_path: Path) -> None:
+    src = _sample_html(tmp_path / "a.html")
+    out = tmp_path / "a.pdf"
+    registry.convert(
+        operation_id="text.html_to_pdf",
+        source=src,
+        destination=out,
+        settings={},
+    )
+    assert out.read_bytes()[:4] == b"%PDF"
+
+
+def test_html_to_docx(registry: ConversionRegistry, tmp_path: Path) -> None:
+    from docx import Document
+
+    src = _sample_html(tmp_path / "a.html")
+    out = tmp_path / "a.docx"
+    registry.convert(
+        operation_id="text.html_to_docx",
+        source=src,
+        destination=out,
+        settings={},
+    )
+    doc = Document(str(out))
+    joined = "\n".join(p.text for p in doc.paragraphs)
+    assert "Title" in joined
+    assert "Hello" in joined
 
 
 def test_pdf_rotate_90(registry: ConversionRegistry, tmp_path: Path) -> None:

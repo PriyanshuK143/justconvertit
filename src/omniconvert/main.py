@@ -23,10 +23,11 @@ def _ensure_stdio() -> None:
 _ensure_stdio()
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from omniconvert.core.registry import get_registry
+from omniconvert.platform.linux_desktop import ensure_linux_desktop_identity
 from omniconvert.services.dependencies import get_dependency_service
 from omniconvert.services.logging_setup import setup_logging
 from omniconvert.services.resilience import (
@@ -85,12 +86,17 @@ def _enable_faulthandler() -> None:
 
 
 def _app_icon() -> QIcon:
-    here = Path(__file__).resolve().parent
-    for name in ("resources/omniconvert.png", "resources/omniconvert.ico"):
-        path = here / name
-        if path.is_file():
-            return QIcon(str(path))
-    return QIcon()
+    """Load the brand mark for the window / taskbar / dock."""
+    here = Path(__file__).resolve().parent / "resources"
+    icon = QIcon()
+    # ICO carries multiple resolutions (best on Windows); PNG covers Linux/Qt.
+    ico = here / "omniconvert.ico"
+    png = here / "omniconvert.png"
+    if ico.is_file():
+        icon.addFile(str(ico))
+    if png.is_file():
+        icon.addFile(str(png))
+    return icon
 
 
 def _show_fatal_dialog(message: str) -> None:
@@ -179,8 +185,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # Create Qt first so a bad display fails fast; keep startup free of
     # Snap LibreOffice --version (multi-second) and heavy converter imports.
+    # On Linux, use a stable argv0 so X11 WM_CLASS matches StartupWMClass=
+    # justconvertit (otherwise the dock shows a generic Python gear).
+    qt_argv0 = "justconvertit" if sys.platform.startswith("linux") else argv[0]
     try:
-        app = QApplication([argv[0], *qt_argv])
+        app = QApplication([qt_argv0, *qt_argv])
     except Exception:
         log.exception("Could not start the display")
         _show_fatal_dialog(
@@ -189,9 +198,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     app.setApplicationName("justconvertit")
+    app.setApplicationDisplayName("justconvertit")
     app.setApplicationVersion(__version__)
     app.setOrganizationName("justconvertit")
-    app.setWindowIcon(_app_icon())
+    # Ubuntu/GNOME (Wayland) docks look up Icon= via this .desktop basename —
+    # setWindowIcon alone is not enough on the dock.
+    QGuiApplication.setDesktopFileName("justconvertit")
+    brand = _app_icon()
+    app.setWindowIcon(brand)
+    # Register ~/.local desktop + hicolor icons so the dock can resolve Icon=.
+    ensure_linux_desktop_identity()
     install_qt_message_silence()
     try:
         apply_theme(app, settings.theme)
@@ -213,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         log.exception("Main window failed to open")
         _show_fatal_dialog(_USER_STARTUP_ERROR)
         return 1
+    window.setWindowIcon(brand)
     set_ui_error_reporter(window._set_status)
     window.show()
     log.info("justconvertit %s started", __version__)

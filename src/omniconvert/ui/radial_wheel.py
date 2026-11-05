@@ -384,10 +384,12 @@ class RadialWheel(QWidget):
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
     def _paint_hub_text(self, painter: QPainter, hub_rect: QRectF) -> None:
-        """Brand/file mark + label + hint, vertically centered as one stack."""
-        single_line = not (self._has_file and self._segments)
-        pad = 14
-        avail = max(48, int(hub_rect.width() - pad * 2))
+        """Brand/file mark + label + hint, fitted inside the circular hub."""
+        # Use the inscribed square so text stays inside the white disc, not the
+        # bounding box corners that sit outside the circle.
+        inset = hub_rect.width() * 0.16
+        content = hub_rect.adjusted(inset, inset, -inset, -inset)
+        avail = max(40, int(content.width()))
         if self._has_file and len(self._segments) == 1:
             sub = f"drag to {self._segments[0].operation.segment_label}"
         elif self._has_file and self._segments:
@@ -395,27 +397,31 @@ class RadialWheel(QWidget):
         else:
             sub = self._center_sub
 
-        icon_size = min(56.0, hub_rect.width() * 0.34)
-        gap_icon = 10.0
-        gap_sub = 4.0
+        label = self._center_label
+        empty = not self._has_file
+        # Empty hub is small (~launch size) — keep the icon modest so the
+        # subtitle can wrap on two readable lines instead of "Click or…p a file".
+        icon_size = min(40.0 if empty else 52.0, content.width() * (0.36 if empty else 0.40))
+        gap_icon = 6.0 if empty else 8.0
+        gap_sub = 3.0
 
         font = QFont(self.font())
         font.setBold(True)
-        label = self._center_label
-        point = 13 if single_line else 10
+        point = 12 if empty else 10
         lines: list[str] = [label]
         while point >= 7:
             font.setPointSize(point)
             fm = QFontMetrics(font)
-            if single_line:
+            if empty:
                 if fm.horizontalAdvance(label) <= avail:
                     lines = [label]
                     break
+                lines = self._wrap_words(label, fm, avail, max_lines=2)
             else:
                 lines = self._wrap_filename(label, fm, avail, max_lines=2)
-                widest = max((fm.horizontalAdvance(ln) for ln in lines), default=0)
-                if widest <= avail:
-                    break
+            widest = max((fm.horizontalAdvance(ln) for ln in lines), default=0)
+            if widest <= avail:
+                break
             point -= 1
         else:
             fm = QFontMetrics(font)
@@ -425,16 +431,39 @@ class RadialWheel(QWidget):
         name_h = fm.lineSpacing() * len(lines)
 
         sub_font = QFont(self.font())
-        sub_font.setPointSize(8)
         sub_font.setBold(False)
-        sub_fm = QFontMetrics(sub_font)
-        sub_h = sub_fm.height() if sub else 0.0
+        sub_point = 9 if empty else 8
+        sub_lines: list[str] = []
+        while sub and sub_point >= 7:
+            sub_font.setPointSize(sub_point)
+            sub_fm = QFontMetrics(sub_font)
+            sub_lines = self._wrap_words(sub, sub_fm, avail, max_lines=2)
+            widest = max((sub_fm.horizontalAdvance(ln) for ln in sub_lines), default=0)
+            sub_h = sub_fm.lineSpacing() * len(sub_lines)
+            stack_h = icon_size + gap_icon + name_h + gap_sub + sub_h
+            if widest <= avail and stack_h <= content.height():
+                break
+            sub_point -= 1
+        else:
+            sub_fm = QFontMetrics(sub_font)
+            if sub:
+                sub_lines = self._wrap_words(sub, sub_fm, avail, max_lines=2)
+            sub_h = sub_fm.lineSpacing() * len(sub_lines) if sub_lines else 0.0
 
-        stack_h = icon_size + gap_icon + name_h + (gap_sub + sub_h if sub else 0.0)
-        top = hub_rect.center().y() - stack_h / 2.0
+        if not sub:
+            sub_h = 0.0
+            sub_lines = []
 
+        stack_h = icon_size + gap_icon + name_h + (gap_sub + sub_h if sub_lines else 0.0)
+        # Shrink the icon if the stack still overflows the disc.
+        if stack_h > content.height() and icon_size > 24:
+            overflow = stack_h - content.height()
+            icon_size = max(24.0, icon_size - overflow)
+            stack_h = icon_size + gap_icon + name_h + (gap_sub + sub_h if sub_lines else 0.0)
+
+        top = content.center().y() - stack_h / 2.0
         icon_rect = QRectF(
-            hub_rect.center().x() - icon_size / 2,
+            content.center().x() - icon_size / 2,
             top,
             icon_size,
             icon_size,
@@ -448,21 +477,55 @@ class RadialWheel(QWidget):
         painter.setPen(self._text)
         painter.setFont(font)
         for ln in lines:
-            line_rect = QRectF(hub_rect.left() + pad, y, hub_rect.width() - pad * 2, fm.lineSpacing())
-            painter.drawText(line_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, ln)
+            line_rect = QRectF(content.left(), y, content.width(), fm.lineSpacing())
+            painter.drawText(
+                line_rect,
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                ln,
+            )
             y += fm.lineSpacing()
 
-        if sub:
+        if sub_lines:
             painter.setPen(self._muted)
             painter.setFont(sub_font)
-            shown = sub_fm.elidedText(sub, Qt.TextElideMode.ElideMiddle, avail)
-            sub_rect = QRectF(
-                hub_rect.left() + pad,
-                y + gap_sub,
-                hub_rect.width() - pad * 2,
-                sub_h,
-            )
-            painter.drawText(sub_rect, Qt.AlignmentFlag.AlignCenter, shown)
+            sub_fm = QFontMetrics(sub_font)
+            y += gap_sub
+            for ln in sub_lines:
+                line_rect = QRectF(content.left(), y, content.width(), sub_fm.lineSpacing())
+                painter.drawText(
+                    line_rect,
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                    ln,
+                )
+                y += sub_fm.lineSpacing()
+
+    def _wrap_words(
+        self, text: str, fm: QFontMetrics, max_width: int, max_lines: int = 2
+    ) -> list[str]:
+        """Wrap on spaces for hub hints (never mid-word cuts like 'Click or…p')."""
+        if fm.horizontalAdvance(text) <= max_width:
+            return [text]
+        words = text.split()
+        if not words:
+            return [text]
+
+        lines: list[str] = []
+        idx = 0
+        while idx < len(words) and len(lines) < max_lines:
+            line = words[idx]
+            idx += 1
+            while idx < len(words):
+                trial = f"{line} {words[idx]}"
+                if fm.horizontalAdvance(trial) > max_width:
+                    break
+                line = trial
+                idx += 1
+            if len(lines) == max_lines - 1 and idx < len(words):
+                rest = " ".join([line, *words[idx:]])
+                lines.append(fm.elidedText(rest, Qt.TextElideMode.ElideRight, max_width))
+                return lines
+            lines.append(line)
+        return lines or [fm.elidedText(text, Qt.TextElideMode.ElideRight, max_width)]
 
     def _wrap_filename(self, text: str, fm: QFontMetrics, max_width: int, max_lines: int = 2) -> list[str]:
         """Wrap a filename onto up to max_lines; elide last line if still too long."""
