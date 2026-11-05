@@ -103,14 +103,14 @@ def test_chip_mode_for_single_option(qapp) -> None:
     wheel.close()
 
 
-def test_many_options_stay_in_chip_mode(qapp) -> None:
-    """Windows HiDPI looked broken with thin wedges — always chips with a file."""
+def test_many_options_use_classic_pads(qapp) -> None:
+    """4+ options → classic ring pads so every action is visible (no More…)."""
     wheel = RadialWheel()
     wheel.resize(QSize(500, 500))
     ops = [_fake_op(f"A{i}", f"a{i}") for i in range(6)]
     wheel.set_operations(ops)
     wheel.set_has_file(True)
-    assert wheel._chip_mode() is True
+    assert wheel._chip_mode() is False
     assert len(wheel._segments) == 6
     # Evenly spaced around the circle (not a top-only cluster).
     mids = sorted(seg.mid_angle_deg % 360.0 for seg in wheel._segments)

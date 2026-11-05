@@ -1,27 +1,11 @@
-"""Pick a clean, small set of wheel actions — rest go under More…"""
+"""Order conversion actions for the radial wheel (no More… overflow)."""
 
 from __future__ import annotations
 
 from omniconvert.core.converter import ConversionOperation
-from omniconvert.core.formats import FormatId
 
-# Keep the orb readable on Windows HiDPI / small screens.
-MAX_WHEEL_ACTIONS = 6
-
-_MORE_OP = ConversionOperation(
-    operation_id="ui.more_actions",
-    label="More actions…",
-    source_formats=frozenset(),
-    target_format=FormatId.TXT,
-    description="Open the full list of conversions for this file.",
-    wheel_label="More",
-    supports_batch=False,
-    tested=True,
-)
-
-
-def more_operation() -> ConversionOperation:
-    return _MORE_OP
+# Physical limit of readable pads on the orb.
+MAX_WHEEL_ACTIONS = 8
 
 
 def _rank(op: ConversionOperation) -> tuple[int, str, str]:
@@ -43,6 +27,8 @@ def _rank(op: ConversionOperation) -> tuple[int, str, str]:
         return (5, label, oid)
     if oid.endswith("_to_mp3") or "extract" in oid:
         return (6, label, oid)
+    if "compress" in oid or label == "compress":
+        return (7, label, oid)
     if "remove_bg" in oid or label in {"no bg", "nobg"}:
         return (40, label, oid)
     if oid.endswith("_to_bmp") or label == "bmp":
@@ -52,18 +38,11 @@ def _rank(op: ConversionOperation) -> tuple[int, str, str]:
     return (20, label, oid)
 
 
-def split_wheel_actions(
+def wheel_operations(
     operations: list[ConversionOperation],
     *,
     max_visible: int = MAX_WHEEL_ACTIONS,
-) -> tuple[list[ConversionOperation], list[ConversionOperation]]:
-    """Return (wheel_ops, overflow_ops).
-
-    If there is overflow, the last wheel slot is reserved for More….
-    """
+) -> list[ConversionOperation]:
+    """Return up to *max_visible* ops in a sensible order — all shown on the wheel."""
     ordered = sorted(operations, key=_rank)
-    if len(ordered) <= max_visible:
-        return ordered, []
-    primary = ordered[: max_visible - 1]
-    overflow = ordered[max_visible - 1 :]
-    return [*primary, more_operation()], overflow
+    return ordered[:max_visible]

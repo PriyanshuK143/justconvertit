@@ -57,7 +57,7 @@ from omniconvert.ui.dialogs import (
 from omniconvert.ui.radial_wheel import RadialWheel
 from omniconvert.ui.save_dialog import SaveAsDialog
 from omniconvert.ui.theme import apply_theme
-from omniconvert.ui.wheel_actions import split_wheel_actions
+from omniconvert.ui.wheel_actions import wheel_operations
 from omniconvert.version import __version__
 
 log = logging.getLogger("omniconvert.ui")
@@ -172,7 +172,6 @@ class MainWindow(QWidget):
         self._batch_active = False
         self._batch_ok = 0
         self._batch_fail = 0
-        self._overflow_ops: list[ConversionOperation] = []
         self._always_on_top = True
         self._hover_chrome = False
         self._status_text = "Click center to open"
@@ -564,16 +563,14 @@ class MainWindow(QWidget):
             log.exception("registry lookup failed: %s", exc)
             ops = []
 
-        wheel_ops, overflow = split_wheel_actions(ops)
+        wheel_ops = wheel_operations(ops)
         self._current_ops = ops
-        self._overflow_ops = overflow
         labels = [op.segment_label for op in wheel_ops]
         log.info(
-            "Loaded %s → %d ops (%d on wheel, %d overflow): %s",
+            "Loaded %s → %d ops (%d on wheel): %s",
             detected.format_id,
             len(ops),
             len(wheel_ops),
-            len(overflow),
             labels,
         )
 
@@ -604,9 +601,6 @@ class MainWindow(QWidget):
             return
         if self.jobs.is_busy:
             self._set_status("Already converting…", "info")
-            return
-        if operation_id == "ui.more_actions":
-            self._show_more_actions_menu()
             return
         try:
             op = self.registry.get_operation(operation_id)
@@ -756,25 +750,6 @@ class MainWindow(QWidget):
             return False
         self._set_status("Tool ready — continuing", "ok")
         return True
-
-    def _show_more_actions_menu(self) -> None:
-        """Overflow conversions that did not fit on the orb."""
-        if not self._overflow_ops:
-            self._set_status("No extra actions", "info")
-            return
-        menu = QMenu(self)
-        menu.setTitle("More conversions")
-        for op in self._overflow_ops:
-            act = menu.addAction(op.label)
-            act.setData(op.operation_id)
-        chosen = menu.exec(self.mapToGlobal(self.rect().center()))
-        if chosen is None:
-            self._set_status("Cancelled", "info")
-            QTimer.singleShot(1800, lambda: self._set_status("", "info"))
-            return
-        op_id = chosen.data()
-        if isinstance(op_id, str) and op_id:
-            self._on_format_selected(op_id)
 
     def _start_conversion(
         self,
@@ -1091,9 +1066,8 @@ class MainWindow(QWidget):
                 ops = self.registry.available_operations_for(
                     self.detected.format_id, include_unavailable=True
                 )
-                wheel_ops, overflow = split_wheel_actions(ops)
+                wheel_ops = wheel_operations(ops)
                 self._current_ops = ops
-                self._overflow_ops = overflow
                 self.wheel.set_operations(wheel_ops)
             self._set_status("Settings saved", "ok")
 

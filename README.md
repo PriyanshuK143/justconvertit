@@ -1,84 +1,84 @@
 # justconvertit
 
-One-time-install, **offline-first** desktop file converter with a circular radial-wheel interface.
+**Local file conversion. One floating wheel. Nothing leaves your machine.**
 
-Files are processed on your machine. justconvertit does not upload documents, require accounts, phone home for updates, or send telemetry.
+justconvertit is a small always-on-top desktop orb: drop a file on the hub, drag toward a format pad, and get a new file next to the original. No accounts, no uploads, no telemetry.
 
-See [docs/PRODUCT.md](docs/PRODUCT.md), [docs/PRIVACY.md](docs/PRIVACY.md), and [docs/PLATFORMS.md](docs/PLATFORMS.md).
+---
 
-## Features (v0.1)
+## Why it exists
 
-- **Desktop orb widget** — frameless, always-on-top floating wheel
-- Click the **center** (or drop a file) to open
-- After a file loads, **drag from the center** toward a format pad, or click a pad
-- Background conversion with progress and cancellation
-- Safe output naming (never overwrites the original by default)
-- Optional LibreOffice / FFmpeg for best Office↔PDF and audio (`sudo apt install libreoffice ffmpeg` on Ubuntu)
-- **No in-app updater** — new versions ship as new installers on the release page
-- Security posture and limits: [docs/SECURITY.md](docs/SECURITY.md)
+Most converters either bury you in a website form or ship a bloated suite. justconvertit stays out of the way: a single radial control that only shows what that file can become, then gets out of your way.
 
-Conversion list: [docs/CONVERSION_MATRIX.md](docs/CONVERSION_MATRIX.md). Status: [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
+| | |
+|---|---|
+| **Offline-first** | Core conversions work with no network after install |
+| **Private by design** | Files never leave the device |
+| **One-time install** | No in-app updater, subscriptions, or login |
+| **Safe outputs** | New names by default — originals stay untouched |
 
-## End users (no Python required)
+---
 
-Download from the **stable release page**, verify checksums, then:
+## How it works
 
-**Ubuntu** — install the `.deb` (double-click / App Center, or `sudo apt install ./justconvertit_0.1.0_amd64.deb`), then open **justconvertit** from the app menu.
+1. Click the center (or drop a file) to load
+2. Pads appear for formats and actions that apply
+3. Drag from the hub to a pad — or click the pad
+4. Conversion runs in the background; cancel anytime
 
-**Windows** — run `justconvertit-<version>-Setup.exe`, then launch from the Start menu.
+Optional tools on your system (LibreOffice, FFmpeg) unlock richer Office and audio/video paths when present. Without them, portable core conversions still work.
 
-Details: [docs/INSTALL.md](docs/INSTALL.md). After installation, core conversions work without internet.
+---
 
-## Development setup (Ubuntu)
+## What it converts
 
-```bash
-cd Justconvertit
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -r requirements-release.txt
-pip install -e ".[dev]"
-```
+**Images** — PNG, JPEG, WEBP, BMP, TIFF · crop · resize · remove solid background · image → PDF  
 
-### Run
+**Documents & text** — TXT, Markdown, HTML, JSON, CSV, XLSX · DOCX / PPTX text extract · PDF create & extract  
 
-```bash
-python -m omniconvert
-```
+**PDF** — text extract · page render · pages → ZIP · rotate · compress · merge  
 
-### Test
+**Media** *(with FFmpeg)* — WAV ↔ MP3 · video → MP3 · GIF ↔ MP4 · frame exports  
 
-```bash
-bash scripts/test.sh
-```
+Full matrix: [docs/CONVERSION_MATRIX.md](docs/CONVERSION_MATRIX.md)
 
-> On some Ubuntu machines with ROS installed, plain `pytest` fails because system plugins break collection. Use `scripts/test.sh`.
+---
 
-## Development setup (Windows)
+## Platforms
 
-Windows is the **primary** product target. Full guide: [docs/WINDOWS.md](docs/WINDOWS.md).
+| Platform | Artifact |
+|----------|----------|
+| **Windows** | Setup installer (Start menu launch) |
+| **Ubuntu / Debian** | `.deb` package (app menu launch) |
 
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-pip install -r requirements-release.txt
-pip install -e ".[dev]"
-python -m omniconvert
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD=1; $env:QT_QPA_PLATFORM="offscreen"; pytest -p pytestqt
-```
+Install guide: [docs/INSTALL.md](docs/INSTALL.md) · platform notes: [docs/PLATFORMS.md](docs/PLATFORMS.md)
 
-## Packaging (reproducible)
+---
 
-Release builds **must** use `requirements-release.txt`. Process: [docs/RELEASE.md](docs/RELEASE.md).
+## Privacy & security
 
-```bash
-bash scripts/build_linux.sh          # PyInstaller folder + .deb
-bash scripts/verify_offline.sh
-```
+- No cloud APIs for conversion  
+- No accounts or licensing servers  
+- No phone-home update checks  
 
-Windows: `.\scripts\build_windows.ps1`, then compile `packaging/windows/installer.iss` with Inno Setup.
+Details: [docs/PRIVACY.md](docs/PRIVACY.md) · [docs/SECURITY.md](docs/SECURITY.md) · [docs/PRODUCT.md](docs/PRODUCT.md)
+
+---
+
+## Docs
+
+| Doc | For |
+|-----|-----|
+| [INSTALL](docs/INSTALL.md) | End-user install & uninstall |
+| [CONVERSION_MATRIX](docs/CONVERSION_MATRIX.md) | Exact supported paths |
+| [WINDOWS](docs/WINDOWS.md) | Windows build & packaging |
+| [RELEASE](docs/RELEASE.md) | Reproducible release builds |
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | Internals |
+| [PROJECT_STATUS](docs/PROJECT_STATUS.md) | Current status |
+
+---
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Third-party notices: [docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md).
+MIT — see [LICENSE](LICENSE).  
+Third-party notices: [docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)

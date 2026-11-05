@@ -23,16 +23,19 @@ from omniconvert.product import APP_NAME
 from omniconvert.ui.icons import paint_convert_mark, paint_file_mark, paint_format_icon
 
 _MAX_PADS = 8
+# Fraction of each slice used by the pad (rest is a slim gap between sides).
+_PAD_FILL = 0.86
 # Cap so a single option never becomes a near-full C-ring.
 _MAX_PAD_SPAN_DEG = 56.0
 _SINGLE_PAD_SPAN_DEG = 58.0
 _CLUSTER_GAP_DEG = 12.0
 # How far a hovered pad grows outward when it "pops".
-_POP_SCALE = 0.08
+_POP_SCALE = 0.10
 # Shared layout for chip + full-ring modes (same hub / gap proportions).
-_HUB_FRAC = 0.40
-_HUB_PAD_GAP = 0.10
-# Thin wedges look broken on Windows HiDPI — always use action chips with a file.
+_HUB_FRAC = 0.42
+_HUB_PAD_GAP = 0.09
+# Few options → chunky chips; many options → classic ring pads (no More…).
+_CHIP_MODE_MAX = 3
 
 
 @dataclass
@@ -157,14 +160,15 @@ class RadialWheel(QWidget):
         return None
 
     def _chip_mode(self) -> bool:
-        """Action chips only — wedge pads overlap / clip badly on Windows HiDPI."""
-        return bool(self._has_file and self._segments)
+        """Few options → rounded chips; 4+ → classic ring pads (all visible)."""
+        n = len(self._segments) if self._segments else len(self._operations)
+        return bool(self._has_file and 0 < n <= _CHIP_MODE_MAX)
 
     def _rebuild_segments(self) -> None:
-        """Place action chips around the hub (never thin overlapping wedges).
+        """Place pads around the hub.
 
-        1–3 options: compact cluster near the top.
-        4–8 options: even spacing around the circle so chips do not collide.
+        1–3 options: compact chips clustered near the top.
+        4–8 options: even full-circle ring pads (classic look, all options visible).
         """
         self._segments.clear()
         n = len(self._operations)
@@ -189,9 +193,8 @@ class RadialWheel(QWidget):
                 self._segments.append(_Segment(op, start, span, mid))
             return
 
-        # Full circle of chips — equal gaps, no wedge fill.
         slot = 360.0 / n
-        span = min(42.0, slot * 0.55)
+        span = min(slot * _PAD_FILL, _MAX_PAD_SPAN_DEG)
         for i, op in enumerate(self._operations):
             mid = (90.0 - i * slot) % 360.0
             start = (mid - span / 2.0) % 360.0
@@ -292,9 +295,12 @@ class RadialWheel(QWidget):
             show_pads = bool(self._has_file and self._segments)
             if show_pads:
                 self._paint_drag_hints(painter, c, hub, inner, outer)
-                # Always chips with a file — never thin overlapping wedges.
-                for i, seg in enumerate(self._segments):
-                    self._paint_action_chip(painter, c, outer, inner, seg, i)
+                if self._chip_mode():
+                    for i, seg in enumerate(self._segments):
+                        self._paint_action_chip(painter, c, outer, inner, seg, i)
+                else:
+                    for i, seg in enumerate(self._segments):
+                        self._paint_pad(painter, c, outer, inner, seg, i)
 
             hub_rect = QRectF(c.x() - hub, c.y() - hub, hub * 2, hub * 2)
             self._paint_hub_chrome(painter, c, hub, hub_rect)
@@ -385,7 +391,7 @@ class RadialWheel(QWidget):
         if self._has_file and len(self._segments) == 1:
             sub = f"drag to {self._segments[0].operation.segment_label}"
         elif self._has_file and self._segments:
-            sub = "drag to an action"
+            sub = "drag to a pad"
         else:
             sub = self._center_sub
 
@@ -519,19 +525,13 @@ class RadialWheel(QWidget):
         grow = outer * _POP_SCALE * max(pop, 0.06 * breathe)
         r = (outer + inner) / 2.0 + grow * 0.25
         pt = _point_on_circle(c, r, seg.mid_angle_deg)
-        # Scale chips down when many actions share the ring (Windows HiDPI safety).
         band = max(48.0, outer - inner)
         n = max(len(self._segments), 1)
-        if n <= 2:
-            base_w, base_h = 88.0, 76.0
-        elif n <= 4:
-            base_w, base_h = 78.0, 68.0
-        else:
-            base_w, base_h = 68.0, 60.0
-        w = min(base_w, max(56.0, band * (0.95 if n <= 4 else 0.82)))
-        h = min(base_h, max(50.0, band * (0.88 if n <= 4 else 0.75)))
-        w += 4.0 * pop
-        h += 3.0 * pop
+        base = 1.08 if n == 1 else (1.0 if n == 2 else 0.92)
+        w = min(92.0, max(72.0, band * 1.05 * base))
+        h = min(84.0, max(68.0, band * 0.98 * base))
+        w += 6.0 * pop
+        h += 5.0 * pop
         return QRectF(pt.x() - w / 2.0, pt.y() - h / 2.0, w, h)
 
     def _paint_drag_hints(
@@ -624,11 +624,12 @@ class RadialWheel(QWidget):
         painter.drawRoundedRect(rect, radius, radius)
 
         label = seg.operation.segment_label
-        # Square icon tile — avoids PDF/letter glyphs getting clipped.
-        side = min(40.0, rect.width() * 0.52) + 4.0 * pop
+        # Icon + label both stay inside the chip card (no floating text).
+        painter.setClipRect(rect.adjusted(4, 4, -4, -4))
+        side = min(34.0, rect.width() * 0.42)
         icon_rect = QRectF(
             rect.center().x() - side / 2,
-            rect.top() + 10,
+            rect.top() + 8,
             side,
             side,
         )
@@ -642,14 +643,21 @@ class RadialWheel(QWidget):
 
         painter.setPen(self._label_on_hot if hot else self._text)
         font = QFont(self.font())
-        font.setPointSize(12 if hot else 11)
+        font.setPointSize(10 if hot else 9)
         font.setBold(True)
         painter.setFont(font)
+        label_rect = QRectF(
+            rect.left() + 4,
+            icon_rect.bottom() + 2,
+            rect.width() - 8,
+            max(16.0, rect.bottom() - icon_rect.bottom() - 6),
+        )
         painter.drawText(
-            QRectF(rect.left(), icon_rect.bottom() + 4, rect.width(), 20),
-            Qt.AlignmentFlag.AlignCenter,
+            label_rect,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
             label,
         )
+        painter.setClipping(False)
 
     def _paint_pad(
         self,
@@ -691,10 +699,14 @@ class RadialWheel(QWidget):
         painter.setBrush(fill)
         painter.drawPath(path)
 
-        pt = _point_on_circle(c, (pad_outer + pad_inner) / 2.0, seg.mid_angle_deg)
+        # Clip icon + label to the pad wedge so names never float outside.
+        painter.setClipPath(path)
+        mid_r = (pad_outer + pad_inner) / 2.0
+        pt = _point_on_circle(c, mid_r, seg.mid_angle_deg)
         label = seg.operation.segment_label
-        side = 32.0
-        icon_rect = QRectF(pt.x() - side / 2, pt.y() - side / 2 - 6, side, side)
+        band = max(28.0, pad_outer - pad_inner)
+        side = min(28.0, band * 0.55)
+        icon_rect = QRectF(pt.x() - side / 2, pt.y() - side / 2 - 8, side, side)
         paint_format_icon(
             painter,
             icon_rect,
@@ -704,14 +716,17 @@ class RadialWheel(QWidget):
         )
         painter.setPen(self._label_on_hot if hot else self._text)
         font = QFont(self.font())
-        font.setPointSize(10 if hot else 9)
+        font.setPointSize(9 if hot else 8)
         font.setBold(True)
         painter.setFont(font)
+        fm = QFontMetrics(font)
+        elided = fm.elidedText(label, Qt.TextElideMode.ElideRight, int(band * 1.1))
         painter.drawText(
-            QRectF(pt.x() - 40, icon_rect.bottom() + 2, 80, 18),
-            Qt.AlignmentFlag.AlignCenter,
-            label,
+            QRectF(pt.x() - 36, icon_rect.bottom() + 1, 72, fm.height() + 2),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+            elided,
         )
+        painter.setClipping(False)
 
     def _start_system_or_fallback_move(self, event: QMouseEvent) -> bool:
         """Begin moving the frameless window.
